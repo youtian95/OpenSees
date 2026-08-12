@@ -351,6 +351,7 @@
     <ClCompile Include="..\..\..\SRC\material\uniaxial\HyperbolicGapMaterial.cpp" />
     <ClCompile Include="..\..\..\SRC\material\uniaxial\HystereticAsym.cpp" />
     <ClCompile Include="..\..\..\SRC\material\uniaxial\HystereticMaterial.cpp" />
+    <ClCompile Include="..\..\..\SRC\material\uniaxial\RinaldinMasonryMaterial.cpp" />
     <ClCompile Include="..\..\..\SRC\material\uniaxial\HystereticPoly.cpp" />
     <ClCompile Include="..\..\..\SRC\material\uniaxial\HystereticSMMaterial.cpp" />
     <ClCompile Include="..\..\..\SRC\material\uniaxial\HystereticSmooth.cpp" />
@@ -810,6 +811,7 @@
     <ClInclude Include="..\..\..\SRC\material\uniaxial\HookGap.h" />
     <ClInclude Include="..\..\..\SRC\material\uniaxial\HyperbolicGapMaterial.h" />
     <ClInclude Include="..\..\..\SRC\material\uniaxial\HystereticMaterial.h" />
+    <ClInclude Include="..\..\..\SRC\material\uniaxial\RinaldinMasonryMaterial.h" />
     <ClInclude Include="..\..\..\SRC\material\uniaxial\HystereticPoly.h" />
     <ClInclude Include="..\..\..\SRC\material\uniaxial\HystereticSMMaterial.h" />
     <ClInclude Include="..\..\..\SRC\material\uniaxial\IMKBilin.h" />

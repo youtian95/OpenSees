@@ -112,6 +112,7 @@
 #include "HardeningMaterial.h"
 #include "HystereticMaterial.h"
 #include "HystereticSMMaterial.h"
+#include "RinaldinMasonryMaterial.h"
 #include "OOHystereticMaterial.h"
 #include "EPPGapMaterial.h"
 #include "HookGap.h"
@@ -1908,6 +1909,9 @@ FEM_ObjectBrokerAllClasses::getNewUniaxialMaterial(int classTag)
 
 	case MAT_TAG_HystereticSM:			
 		return new HystereticSMMaterial();
+
+	case MAT_TAG_RinaldinMasonryMaterial:
+		return new RinaldinMasonryMaterial();
 
 	case MAT_TAG_OOHysteretic:			
 		return new OOHystereticMaterial();		

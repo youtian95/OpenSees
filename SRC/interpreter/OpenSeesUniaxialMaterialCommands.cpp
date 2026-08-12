@@ -287,6 +287,8 @@ void* OPS_APDFMD(void);
 void* OPS_PipeMaterial();
 void* OPS_TzSandCPT(void);
 void* OPS_QbSandCPT(void);
+void* OPS_RinaldinMasonryShear(void);
+void* OPS_RinaldinMasonryFlexural(void);
 
 
 namespace {
@@ -644,6 +646,10 @@ static int setUpUniaxialMaterials(void) {
       std::make_pair("APDMD", &OPS_APDMD));
   uniaxialMaterialsMap.insert(
       std::make_pair("APDFMD", &OPS_APDFMD));
+  uniaxialMaterialsMap.insert(
+      std::make_pair("RinaldinMasonryShear", &OPS_RinaldinMasonryShear));
+  uniaxialMaterialsMap.insert(
+      std::make_pair("RinaldinMasonryFlexural", &OPS_RinaldinMasonryFlexural));
   uniaxialMaterialsMap.insert(
       std::make_pair("Hertzdamp", &OPS_Hertzdamp));
   uniaxialMaterialsMap.insert(

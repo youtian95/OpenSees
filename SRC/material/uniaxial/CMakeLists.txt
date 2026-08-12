@@ -157,6 +157,7 @@ target_sources(OPS_Material
       ReinforcingSteel.cpp
       ResilienceMaterialHR.cpp
       SAWSMaterial.cpp
+      RinaldinMasonryMaterial.cpp
       SPSW02.cpp
       SecantConcrete.cpp
       SelfCenteringMaterial.cpp
@@ -285,6 +286,7 @@ target_sources(OPS_Material
       ReinforcingSteel.h
       ResilienceMaterialHR.h
       SAWSMaterial.h
+      RinaldinMasonryMaterial.h
       SPSW02.h
       SecantConcrete.h
       SelfCenteringMaterial.h

@@ -207,6 +207,8 @@ extern void *OPS_GMG_CyclicReinforcedConcrete(void); // Rasool Ghorbani
 extern void* OPS_Ratchet(void); // Yi Xiao
 extern void* OPS_APDFMD(void);
 extern void* OPS_APDMD(void);
+extern void* OPS_RinaldinMasonryShear(void);
+extern void* OPS_RinaldinMasonryFlexural(void);
 extern void* OPS_APDVFD(void);
 extern void* OPS_TzSandCPT(void); 
 extern void* OPS_QbSandCPT(void);
@@ -2166,6 +2168,20 @@ TclModelBuilderUniaxialMaterialCommand (ClientData clientData, Tcl_Interp *inter
     }
     if ((strcmp(argv[1], "APDMD") == 0)) {
         void* theMat = OPS_APDMD();
+        if (theMat != 0)
+            theMaterial = (UniaxialMaterial*)theMat;
+        else
+            return TCL_ERROR;
+    }
+    if ((strcmp(argv[1], "RinaldinMasonryShear") == 0)) {
+        void* theMat = OPS_RinaldinMasonryShear();
+        if (theMat != 0)
+            theMaterial = (UniaxialMaterial*)theMat;
+        else
+            return TCL_ERROR;
+    }
+    if ((strcmp(argv[1], "RinaldinMasonryFlexural") == 0)) {
+        void* theMat = OPS_RinaldinMasonryFlexural();
         if (theMat != 0)
             theMaterial = (UniaxialMaterial*)theMat;
         else

@@ -50,6 +50,7 @@ OBJS       = UniaxialMaterial.o \
 	RambergOsgoodSteel.o \
 	Ratchet.o \
 	Steel01.o \
+	RinaldinMasonryMaterial.o \
         HystereticMaterial.o \
 	HystereticSMMaterial.o \
         SteelDRC.o \
