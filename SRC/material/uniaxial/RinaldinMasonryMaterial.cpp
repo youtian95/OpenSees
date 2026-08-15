@@ -254,7 +254,11 @@ double RinaldinMasonryMaterial::envelopeStress(double strain) const
 {
     const double absoluteStrain = std::abs(strain);
     if (modelType == Shear && absoluteStrain > ultimateDeformation) {
-        return 0.0;
+        // Retain the residual shear strength beyond Uult instead of dropping to zero.
+        const double residualForce = maximumForce
+            + secondPostYieldStiffness
+                * (ultimateDeformation - peakDeformation);
+        return signOf(strain) * std::max(0.0, residualForce);
     }
 
     double force = 0.0;
