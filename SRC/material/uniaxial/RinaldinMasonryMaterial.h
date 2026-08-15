@@ -3,7 +3,7 @@
  *
  * Usage: create RinaldinMasonryShear or RinaldinMasonryFlexural and
  * assign it to a translational or rotational zeroLength degree of freedom.
- * Inputs: 9 shear or 11 flexural parameters exported by So.ph.i.
+ * Inputs: 9 shear or 10 flexural parameters.
  * Outputs: force/moment and tangent stiffness at the supplied deformation.
  */
 
@@ -59,7 +59,7 @@ public:
     void Print(OPS_Stream &stream, int flag = 0) override;
 
 private:
-    static constexpr int MaxParameterCount = 11;
+    static constexpr int MaxParameterCount = 10;
 
     // Stores extrema, energy, and piecewise path state for one step.
     struct State {
@@ -97,7 +97,7 @@ private:
     State committed;
     State trial;
 
-    // Computes yield and peak deformation from the So.ph.i. inputs.
+    // Computes yield and maximum-force deformations from the input stiffnesses.
     void setDerivedParameters();
     bool validateParameters(bool printMessage) const;
 

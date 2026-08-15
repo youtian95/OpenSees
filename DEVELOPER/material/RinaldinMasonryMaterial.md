@@ -25,7 +25,7 @@ uniaxialMaterial RinaldinMasonryShear $tag \
 
 ```tcl
 uniaxialMaterial RinaldinMasonryFlexural $tag \
-    $Kel $Fy $K1pl $Fmax $CC $CF $alpha $CD $Uult $free $K2pl
+    $Kel $Fy $K1pl $Fmax $CC $CF $alpha $CD $Uult $K2pl
 ```
 
 - `Kel`：弹性转动刚度。
@@ -37,8 +37,7 @@ uniaxialMaterial RinaldinMasonryFlexural $tag \
 - `alpha`：第一卸载分支相对弹性分支的刚度系数。
 - `CD`：D 点相对于最新屈服位移的向右移动比例，`u_D=sign(M_A)*(1+CD)*Fy/Kel`。
 - `Uult`：极限转角。
-- `free`：So.ph.i. 导出兼容字段；当前仅接受已验证值 `0`。
-- `K2pl`：第二后弹性分支刚度；论文双折线模型通常取 `0`。
+- `K2pl`：达到 `Fmax` 或 `Uult` 中较早者后采用的第二后弹性分支刚度；论文双折线模型通常取 `0`。
 
 ## zeroLength 示例
 
@@ -50,7 +49,7 @@ element zeroLength 101 11 12 -mat 1 -dir 1
 
 # 端部弯曲弹簧绕转动自由度 5 工作。
 uniaxialMaterial RinaldinMasonryFlexural 2 \
-    1.6 18.6 0.3 25.0 1.0 0.1 0.8 0.1 34.0 0.0 0.0
+    1.6 18.6 0.3 25.0 1.0 0.1 0.8 0.1 34.0 0.0
 element zeroLength 102 21 22 -mat 2 -dir 5
 ```
 

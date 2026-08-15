@@ -37,7 +37,7 @@ void printShearUsage()
 void printFlexuralUsage()
 {
     opserr << "Want: uniaxialMaterial RinaldinMasonryFlexural tag "
-           << "Kel Fy K1pl Fmax CC CF alpha CD Uult free K2pl" << endln;
+           << "Kel Fy K1pl Fmax CC CF alpha CD Uult K2pl" << endln;
 }
 } // namespace
 
@@ -74,7 +74,7 @@ void *OPS_RinaldinMasonryShear()
 
 void *OPS_RinaldinMasonryFlexural()
 {
-    if (OPS_GetNumRemainingInputArgs() != 12) {
+    if (OPS_GetNumRemainingInputArgs() != 11) {
         printFlexuralUsage();
         return nullptr;
     }
@@ -86,8 +86,8 @@ void *OPS_RinaldinMasonryFlexural()
         return nullptr;
     }
 
-    double values[11];
-    count = 11;
+    double values[10];
+    count = 10;
     if (OPS_GetDoubleInput(&count, values) != 0) {
         opserr << "WARNING invalid parameters for RinaldinMasonryFlexural "
                << tag << endln;
@@ -95,7 +95,7 @@ void *OPS_RinaldinMasonryFlexural()
     }
 
     auto *material = new RinaldinMasonryMaterial(
-        tag, RinaldinMasonryMaterial::Flexural, values, 11);
+        tag, RinaldinMasonryMaterial::Flexural, values, 10);
     if (material == nullptr || material->getInitialTangent() <= 0.0) {
         delete material;
         return nullptr;
@@ -159,21 +159,23 @@ void RinaldinMasonryMaterial::setDerivedParameters()
 {
     elasticStiffness = parameters[0];
     yieldForce = parameters[1];
-    firstPostYieldStiffness = parameters[2];
-    maximumForce = parameters[3];
-    secondPostYieldStiffness =
-        modelType == Shear ? parameters[4] : parameters[10];
-    ultimateDeformation = parameters[8];
-
     yieldDeformation = elasticStiffness > 0.0
         ? yieldForce / elasticStiffness
         : 0.0;
-    if (firstPostYieldStiffness > 0.0) {
-        peakDeformation = yieldDeformation
-            + (maximumForce - yieldForce) / firstPostYieldStiffness;
-    } else {
-        peakDeformation = yieldDeformation;
-    }
+
+    firstPostYieldStiffness = parameters[2];
+    maximumForce = parameters[3];
+    secondPostYieldStiffness = modelType == Shear
+        ? parameters[4]
+        : parameters[9];
+    ultimateDeformation = parameters[8];
+    const double forcePeakDeformation = firstPostYieldStiffness > Tiny
+        ? yieldDeformation
+            + (maximumForce - yieldForce) / firstPostYieldStiffness
+        : yieldDeformation;
+    peakDeformation = modelType == Flexural
+        ? std::min(forcePeakDeformation, ultimateDeformation)
+        : forcePeakDeformation;
 }
 
 bool RinaldinMasonryMaterial::validateParameters(bool printMessage) const
@@ -187,7 +189,7 @@ bool RinaldinMasonryMaterial::validateParameters(bool printMessage) const
         }
     };
 
-    if (parameterCount != (modelType == Shear ? 9 : 11)) {
+    if (parameterCount != (modelType == Shear ? 9 : 10)) {
         report("parameter count does not match the selected model");
     }
     for (int i = 0; i < parameterCount; ++i) {
@@ -199,17 +201,16 @@ bool RinaldinMasonryMaterial::validateParameters(bool printMessage) const
     if (elasticStiffness <= 0.0) {
         report("Kel must be greater than zero");
     }
-    if (yieldForce <= 0.0 || maximumForce < yieldForce) {
-        report("require Fmax >= Fy > 0");
-    }
-    if (maximumForce > yieldForce && firstPostYieldStiffness <= 0.0) {
-        report("K1pl must be positive when Fmax is greater than Fy");
-    }
-    if (ultimateDeformation <= 0.0 || peakDeformation > ultimateDeformation) {
-        report("Uult must not be smaller than the deformation at Fmax");
-    }
-
     if (modelType == Shear) {
+        if (yieldForce <= 0.0 || maximumForce < yieldForce) {
+            report("require Fmax >= Fy > 0");
+        }
+        if (maximumForce > yieldForce && firstPostYieldStiffness <= 0.0) {
+            report("K1pl must be positive when Fmax is greater than Fy");
+        }
+        if (ultimateDeformation <= 0.0 || peakDeformation > ultimateDeformation) {
+            report("Uult must not be smaller than the deformation at Fmax");
+        }
         const double CF = parameters[5];
         const double alpha = parameters[6];
         const double beta = parameters[7];
@@ -223,11 +224,19 @@ bool RinaldinMasonryMaterial::validateParameters(bool printMessage) const
             report("beta must be nonnegative");
         }
     } else {
+        if (yieldForce <= 0.0 || maximumForce < yieldForce) {
+            report("require Fmax >= Fy > 0");
+        }
+        if (maximumForce > yieldForce && firstPostYieldStiffness <= 0.0) {
+            report("K1pl must be positive when Fmax is greater than Fy");
+        }
+        if (ultimateDeformation <= yieldDeformation) {
+            report("Uult must be greater than the yield deformation Fy/Kel");
+        }
         const double CC = parameters[4];
         const double CF = parameters[5];
         const double alpha = parameters[6];
         const double CD = parameters[7];
-        const double freeParameter = parameters[9];
         if (CC <= 0.0) {
             report("CC must be greater than zero");
         }
@@ -237,9 +246,6 @@ bool RinaldinMasonryMaterial::validateParameters(bool printMessage) const
         if (alpha <= 0.0 || alpha > 1.0) {
             report("alpha must be in (0, 1]");
         }
-        if (std::abs(freeParameter) > Tiny) {
-            report("the undocumented So.ph.i. 'free' parameter is only supported as 0");
-        }
     }
     return valid;
 }
@@ -247,7 +253,7 @@ bool RinaldinMasonryMaterial::validateParameters(bool printMessage) const
 double RinaldinMasonryMaterial::envelopeStress(double strain) const
 {
     const double absoluteStrain = std::abs(strain);
-    if (absoluteStrain > ultimateDeformation) {
+    if (modelType == Shear && absoluteStrain > ultimateDeformation) {
         return 0.0;
     }
 
@@ -258,7 +264,11 @@ double RinaldinMasonryMaterial::envelopeStress(double strain) const
         force = yieldForce
             + firstPostYieldStiffness * (absoluteStrain - yieldDeformation);
     } else {
-        force = maximumForce
+        const double transitionForce = modelType == Flexural
+            ? yieldForce + firstPostYieldStiffness
+                * (peakDeformation - yieldDeformation)
+            : maximumForce;
+        force = transitionForce
             + secondPostYieldStiffness * (absoluteStrain - peakDeformation);
         force = std::max(0.0, force);
     }
@@ -268,7 +278,7 @@ double RinaldinMasonryMaterial::envelopeStress(double strain) const
 double RinaldinMasonryMaterial::envelopeTangent(double strain) const
 {
     const double absoluteStrain = std::abs(strain);
-    if (absoluteStrain > ultimateDeformation) {
+    if (modelType == Shear && absoluteStrain > ultimateDeformation) {
         return Tiny * elasticStiffness;
     }
     if (absoluteStrain < yieldDeformation) {
@@ -559,29 +569,29 @@ int RinaldinMasonryMaterial::sendSelf(
     int commitTag,
     Channel &theChannel)
 {
-    Vector data(30);
+    Vector data(29);
     data(0) = getTag();
     data(1) = static_cast<int>(modelType);
     data(2) = parameterCount;
     for (int i = 0; i < MaxParameterCount; ++i) {
         data(3 + i) = parameters[i];
     }
-    data(14) = committed.strain;
-    data(15) = committed.stress;
-    data(16) = committed.tangent;
-    data(17) = committed.maxPositiveStrain;
-    data(18) = committed.minNegativeStrain;
-    data(19) = committed.work;
-    data(20) = committed.direction;
-    data(21) = committed.pathStage;
-    data(22) = committed.pathStartStrain;
-    data(23) = committed.pathStartStress;
-    data(24) = committed.break1Strain;
-    data(25) = committed.break1Stress;
-    data(26) = committed.break2Strain;
-    data(27) = committed.break2Stress;
-    data(28) = committed.targetStrain;
-    data(29) = committed.targetStress;
+    data(13) = committed.strain;
+    data(14) = committed.stress;
+    data(15) = committed.tangent;
+    data(16) = committed.maxPositiveStrain;
+    data(17) = committed.minNegativeStrain;
+    data(18) = committed.work;
+    data(19) = committed.direction;
+    data(20) = committed.pathStage;
+    data(21) = committed.pathStartStrain;
+    data(22) = committed.pathStartStress;
+    data(23) = committed.break1Strain;
+    data(24) = committed.break1Stress;
+    data(25) = committed.break2Strain;
+    data(26) = committed.break2Stress;
+    data(27) = committed.targetStrain;
+    data(28) = committed.targetStress;
 
     if (getDbTag() == 0) {
         setDbTag(theChannel.getDbTag());
@@ -594,7 +604,7 @@ int RinaldinMasonryMaterial::recvSelf(
     Channel &theChannel,
     FEM_ObjectBroker &theBroker)
 {
-    Vector data(30);
+    Vector data(29);
     const int result = theChannel.recvVector(getDbTag(), commitTag, data);
     if (result < 0) {
         opserr << "RinaldinMasonryMaterial::recvSelf failed" << endln;
@@ -608,22 +618,22 @@ int RinaldinMasonryMaterial::recvSelf(
         parameters[i] = data(3 + i);
     }
     setDerivedParameters();
-    committed.strain = data(14);
-    committed.stress = data(15);
-    committed.tangent = data(16);
-    committed.maxPositiveStrain = data(17);
-    committed.minNegativeStrain = data(18);
-    committed.work = data(19);
-    committed.direction = static_cast<int>(data(20));
-    committed.pathStage = static_cast<int>(data(21));
-    committed.pathStartStrain = data(22);
-    committed.pathStartStress = data(23);
-    committed.break1Strain = data(24);
-    committed.break1Stress = data(25);
-    committed.break2Strain = data(26);
-    committed.break2Stress = data(27);
-    committed.targetStrain = data(28);
-    committed.targetStress = data(29);
+    committed.strain = data(13);
+    committed.stress = data(14);
+    committed.tangent = data(15);
+    committed.maxPositiveStrain = data(16);
+    committed.minNegativeStrain = data(17);
+    committed.work = data(18);
+    committed.direction = static_cast<int>(data(19));
+    committed.pathStage = static_cast<int>(data(20));
+    committed.pathStartStrain = data(21);
+    committed.pathStartStress = data(22);
+    committed.break1Strain = data(23);
+    committed.break1Stress = data(24);
+    committed.break2Strain = data(25);
+    committed.break2Stress = data(26);
+    committed.targetStrain = data(27);
+    committed.targetStress = data(28);
     trial = committed;
     return 0;
 }
@@ -633,6 +643,8 @@ void RinaldinMasonryMaterial::Print(OPS_Stream &stream, int flag)
     stream << getClassType() << ", tag: " << getTag() << endln;
     stream << "  Kel: " << elasticStiffness
            << ", Fy: " << yieldForce
+           << ", K1pl: " << firstPostYieldStiffness
            << ", Fmax: " << maximumForce
+           << ", K2pl: " << secondPostYieldStiffness
            << ", Uult: " << ultimateDeformation << endln;
 }
