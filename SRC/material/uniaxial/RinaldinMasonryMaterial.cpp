@@ -421,11 +421,43 @@ void RinaldinMasonryMaterial::startFlexuralReversalPath(int newDirection)
     trial.pathStage = 1;
 }
 
+void RinaldinMasonryMaterial::startSecondaryReversalPath(int newDirection)
+{
+    // A reversal inside an existing unloading/reloading path returns to the
+    // previously reached envelope point in the new loading direction. This
+    // keeps stress continuous and avoids treating a Newton trial as a jump
+    // directly back to the backbone.
+    const double envelopeStrain = newDirection > 0
+        ? committed.maxPositiveStrain
+        : committed.minNegativeStrain;
+    const bool envelopePointIsAhead = newDirection > 0
+        ? envelopeStrain > committed.strain + Tiny
+        : envelopeStrain < committed.strain - Tiny;
+
+    if (!envelopePointIsAhead) {
+        trial.pathStage = 0;
+        return;
+    }
+
+    trial.break1Strain = envelopeStrain;
+    trial.break1Stress = envelopeStress(envelopeStrain);
+    trial.break2Strain = envelopeStrain;
+    trial.break2Stress = trial.break1Stress;
+    trial.targetStrain = envelopeStrain;
+    trial.targetStress = trial.break1Stress;
+    trial.pathStage = 1;
+}
+
 void RinaldinMasonryMaterial::startReversalPath(int newDirection)
 {
     trial.direction = newDirection;
     trial.pathStartStrain = committed.strain;
     trial.pathStartStress = committed.stress;
+
+    if (committed.pathStage != 0) {
+        startSecondaryReversalPath(newDirection);
+        return;
+    }
 
     if (std::abs(committed.strain) <= yieldDeformation + Tiny) {
         trial.pathStage = 0;

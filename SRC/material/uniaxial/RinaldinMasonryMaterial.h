@@ -108,6 +108,7 @@ private:
 
     // Creates piecewise unloading points at load reversal.
     void startReversalPath(int newDirection);
+    void startSecondaryReversalPath(int newDirection);
     void startShearReversalPath(int newDirection);
     void startFlexuralReversalPath(int newDirection);
     void evaluateCurrentPath(double strain);
