@@ -210,6 +210,8 @@ extern void *OPS_RockingBC(void);
 extern void* OPS_LehighJoint2d(void);
 extern void *OPS_MasonPan12(void);
 extern void *OPS_MasonPan3D(void);
+extern void *OPS_RinaldinMasonryPierElement(void);
+extern void *OPS_RinaldinMasonrySpandrelElement(void);
 extern void *OPS_BeamGT(void);
 extern void *OPS_BeamWithHinges(void);
 extern void *OPS_MixedBeamColumn2d(void);
@@ -967,6 +969,20 @@ TclModelBuilderElementCommand(ClientData clientData, Tcl_Interp *interp,
 		  return TCL_ERROR;
 	  }
 
+  }
+  else if (strcmp(argv[1], "RinaldinMasonryPierElement") == 0) {
+    void *theEle = OPS_RinaldinMasonryPierElement();
+    if (theEle != 0)
+      theElement = (Element *)theEle;
+    else
+      return TCL_ERROR;
+  }
+  else if (strcmp(argv[1], "RinaldinMasonrySpandrelElement") == 0) {
+    void *theEle = OPS_RinaldinMasonrySpandrelElement();
+    if (theEle != 0)
+      theElement = (Element *)theEle;
+    else
+      return TCL_ERROR;
   }
   else if ((strcmp(argv[1], "BeamGT") == 0)) {
 

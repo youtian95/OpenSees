@@ -81,6 +81,8 @@ void* OPS_ZeroLengthContactNTS2D();
 void* OPS_ZeroLengthInterface2D();
 void* OPS_ComponentElement2d();
 void* OPS_ComponentElement3d();
+void* OPS_RinaldinMasonryPierElement();
+void* OPS_RinaldinMasonrySpandrelElement();
 void* OPS_ZeroLengthImpact3D();
 void* OPS_ModElasticBeam2d();
 void* OPS_ModElasticBeam3d();
@@ -712,6 +714,8 @@ namespace {
 	functionMap.insert(std::make_pair("zeroLengthInterface2D", &OPS_ZeroLengthInterface2D));
 	functionMap.insert(std::make_pair("componentElement2d", &OPS_ComponentElement));
 	functionMap.insert(std::make_pair("componentElement", &OPS_ComponentElement));	
+	functionMap.insert(std::make_pair("RinaldinMasonryPierElement", &OPS_RinaldinMasonryPierElement));
+	functionMap.insert(std::make_pair("RinaldinMasonrySpandrelElement", &OPS_RinaldinMasonrySpandrelElement));
 	functionMap.insert(std::make_pair("zeroLengthImpact3D", &OPS_ZeroLengthImpact3D));
 	functionMap.insert(std::make_pair("ModElasticBeam", &OPS_ModElasticBeam));
 	functionMap.insert(std::make_pair("modElasticBeam", &OPS_ModElasticBeam));

@@ -903,6 +903,8 @@
 #define ELE_TAG_FSIInterfaceElement2D      266  // Massimo Petracca (ASDEA)
 #define ELE_TAG_FSIFluidBoundaryElement2D  267  // Massimo Petracca (ASDEA)
 #define ELE_TAG_ShellNLDKGTThermal		   268 // Giovanni Rinaldin
+#define ELE_TAG_RinaldinMasonryPierElement 269
+#define ELE_TAG_RinaldinMasonrySpandrelElement 270
 #define ELE_TAG_Pipe                      269
 #define ELE_TAG_CurvedPipe                      270
 #define ELE_TAG_PML3DVISCOUS               271 // Amin Pakzad

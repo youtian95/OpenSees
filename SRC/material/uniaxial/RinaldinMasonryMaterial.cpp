@@ -178,6 +178,26 @@ void RinaldinMasonryMaterial::setDerivedParameters()
         : forcePeakDeformation;
 }
 
+void RinaldinMasonryMaterial::setDynamicEnvelope(
+    double yield, double firstPostYield, double maximum,
+    double secondPostYield)
+{
+    yieldForce = yield;
+    firstPostYieldStiffness = firstPostYield;
+    maximumForce = maximum;
+    secondPostYieldStiffness = secondPostYield;
+    yieldDeformation = elasticStiffness > Tiny
+        ? yieldForce / elasticStiffness
+        : 0.0;
+    const double forcePeakDeformation = firstPostYieldStiffness > Tiny
+        ? yieldDeformation
+            + (maximumForce - yieldForce) / firstPostYieldStiffness
+        : yieldDeformation;
+    peakDeformation = modelType == Flexural
+        ? std::min(forcePeakDeformation, ultimateDeformation)
+        : forcePeakDeformation;
+}
+
 bool RinaldinMasonryMaterial::validateParameters(bool printMessage) const
 {
     bool valid = true;
@@ -353,20 +373,26 @@ void RinaldinMasonryMaterial::startShearReversalPath(int newDirection)
         std::abs(committed.minNegativeStrain));
     const double stiffness = unloadingStiffness(maximumAbsoluteStrain);
     const double CF = parameters[5];
-    const double beta = parameters[7];
 
     trial.break1Stress = CF * committed.stress;
     trial.break1Strain = committed.strain
         + (trial.break1Stress - committed.stress) / stiffness;
 
-    const double shift = maximumForce > Tiny
-        ? beta * dissipatedEnergy(committed) / maximumForce
-        : 0.0;
-    trial.targetStrain = -committed.strain + newDirection * shift;
-    // Connect the reversal path continuously to the opposite backbone.
-    trial.targetStress = envelopeStress(trial.targetStrain);
-    trial.break2Strain = trial.targetStrain;
-    trial.break2Stress = trial.targetStress;
+    // The reversed branch targets the opposite history extreme; if that side
+    // has not yielded yet, the target is the opposite yield point.
+    const double oldSign = signOf(committed.stress);
+    const double oppositeStrain = oldSign > 0.0
+        ? (committed.minNegativeStrain < -yieldDeformation - Tiny
+            ? committed.minNegativeStrain
+            : -yieldDeformation)
+        : (committed.maxPositiveStrain > yieldDeformation + Tiny
+            ? committed.maxPositiveStrain
+            : yieldDeformation);
+    const double oppositeStress = envelopeStress(oppositeStrain);
+    trial.targetStrain = oppositeStrain;
+    trial.targetStress = oppositeStress;
+    trial.break2Strain = oppositeStrain;
+    trial.break2Stress = oppositeStress;
     trial.pathStage = 1;
 
     // Collapse to a stable line if a small cycle crosses the target.

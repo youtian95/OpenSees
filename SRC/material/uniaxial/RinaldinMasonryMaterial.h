@@ -44,6 +44,14 @@ public:
     double getTangent() override;
     double getInitialTangent() override;
 
+    // Returns the current envelope values used by a coupled macro-element.
+    double getYieldForce() const { return yieldForce; }
+    double getMaximumForce() const { return maximumForce; }
+    double getFirstPostYieldStiffness() const { return firstPostYieldStiffness; }
+    double getSecondPostYieldStiffness() const { return secondPostYieldStiffness; }
+    void setDynamicEnvelope(double yield, double firstPostYield,
+        double maximum, double secondPostYield);
+
     // Commits, restores, or clears the material history.
     int commitState() override;
     int revertToLastCommit() override;

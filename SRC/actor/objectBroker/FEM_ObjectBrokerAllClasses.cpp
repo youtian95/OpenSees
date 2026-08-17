@@ -113,6 +113,7 @@
 #include "HystereticMaterial.h"
 #include "HystereticSMMaterial.h"
 #include "RinaldinMasonryMaterial.h"
+#include "RinaldinMasonryElement.h"
 #include "OOHystereticMaterial.h"
 #include "EPPGapMaterial.h"
 #include "HookGap.h"
@@ -954,6 +955,12 @@ FEM_ObjectBrokerAllClasses::getNewElement(int classTag)
 
     case ELE_TAG_ComponentElement3d:
       return new ComponentElement3d();      
+
+    case ELE_TAG_RinaldinMasonryPierElement:
+      return new RinaldinMasonryPierElement();
+
+    case ELE_TAG_RinaldinMasonrySpandrelElement:
+      return new RinaldinMasonrySpandrelElement();
       
     case ELE_TAG_ElasticTimoshenkoBeam2d:
       return new ElasticTimoshenkoBeam2d();

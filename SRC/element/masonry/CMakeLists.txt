@@ -3,9 +3,11 @@ target_sources(OPS_Element
     BeamGT.cpp
     MasonPan12.cpp
     MasonPan3D.cpp
+    RinaldinMasonryElement.cpp
   PUBLIC
     BeamGT.h
     MasonPan12.h
     MasonPan3D.h
+    RinaldinMasonryElement.h
 )    
 
