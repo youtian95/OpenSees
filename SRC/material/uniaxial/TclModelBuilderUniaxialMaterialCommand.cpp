@@ -60,6 +60,8 @@ extern "C" int OPS_ResetInputNoBuilder(ClientData clientData, Tcl_Interp * inter
 #include <Trilinwp.h>
 #include <Trilinwp2.h>
 #include <Masonryt.h>
+#include <MasonryShearMat.h>
+#include <MasonryBendingMat.h>
 
 #include <Vector.h>
 #include <string.h>
@@ -196,6 +198,8 @@ extern void *OPS_Masonry(void);
 extern void *OPS_Trilinwp(void);
 extern void *OPS_Trilinwp2(void);
 extern void *OPS_Masonryt(void);
+extern void *OPS_MasonryShearMat(void);
+extern void *OPS_MasonryBendingMat(void);
 extern void *OPS_DowelType(void);
 extern void *OPS_DuctileFracture(void); // Kuanshi Zhong
 extern void *OPS_MultiplierMaterial(void);
@@ -972,6 +976,22 @@ TclModelBuilderUniaxialMaterialCommand (ClientData clientData, Tcl_Interp *inter
 	}
     if (strcmp(argv[1], "Masonryt") == 0) {
 	  void *theMat = OPS_Masonryt();
+	  if (theMat != 0)
+	    theMaterial = (UniaxialMaterial *)theMat;
+	  else
+	    return TCL_ERROR;
+    }
+    // MasonryShearMat: 砌体剪切单轴材料
+    if (strcmp(argv[1], "MasonryShearMat") == 0) {
+	  void *theMat = OPS_MasonryShearMat();
+	  if (theMat != 0)
+	    theMaterial = (UniaxialMaterial *)theMat;
+	  else
+	    return TCL_ERROR;
+    }
+    // MasonryBendingMat: 砌体弯曲单轴材料
+    if (strcmp(argv[1], "MasonryBendingMat") == 0) {
+	  void *theMat = OPS_MasonryBendingMat();
 	  if (theMat != 0)
 	    theMaterial = (UniaxialMaterial *)theMat;
 	  else
@@ -2314,3 +2334,5 @@ TclModelBuilderUniaxialMaterialCommand (ClientData clientData, Tcl_Interp *inter
 
     return TCL_OK;
 }
+
+

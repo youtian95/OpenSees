@@ -935,6 +935,8 @@ MATERIAL_LIBS   =  $(FE)/material/Material.o \
 	$(FE)/material/uniaxial/unloading/KarsanUnloadingRule.o \
 	$(FE)/material/uniaxial/Masonry.o \
 	$(FE)/material/uniaxial/Masonryt.o \
+	$(FE)/material/uniaxial/MasonryShearMat.o \
+	$(FE)/material/uniaxial/MasonryBendingMat.o \
 	$(FE)/material/uniaxial/Trilinwpd.o \
 	$(FE)/material/uniaxial/Trilinwp.o \
 	$(FE)/material/uniaxial/Trilinwp2.o \
@@ -1596,6 +1598,7 @@ wipe: spotless
 	@$(CD) $(FE)/damping; $(MAKE) wipe;
 
 # DO NOT DELETE THIS LINE -- make depend depends on it.
+
 
 
 

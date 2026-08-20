@@ -279,6 +279,8 @@ void *OPS_Masonry(void);
 void *OPS_Trilinwp(void);
 void *OPS_Trilinwp2(void);
 void *OPS_Masonryt(void);
+void *OPS_MasonryShearMat(void);
+void *OPS_MasonryBendingMat(void);
 
 void* OPS_Ratchet(void); // Yi Xiao
 void* OPS_APDVFD(void);
@@ -654,6 +656,8 @@ static int setUpUniaxialMaterials(void) {
       std::make_pair("ViscoelasticGap", &OPS_ViscoelasticGap));
   uniaxialMaterialsMap.insert(std::make_pair("Masonry", &OPS_Masonry));
   uniaxialMaterialsMap.insert(std::make_pair("Masonryt", &OPS_Masonryt));
+  uniaxialMaterialsMap.insert(std::make_pair("MasonryShearMat", &OPS_MasonryShearMat));
+  uniaxialMaterialsMap.insert(std::make_pair("MasonryBendingMat", &OPS_MasonryBendingMat));
   uniaxialMaterialsMap.insert(std::make_pair("Trilinwp", &OPS_Trilinwp));
   uniaxialMaterialsMap.insert(std::make_pair("Trilinwp2", &OPS_Trilinwp2));
   uniaxialMaterialsMap.insert(std::make_pair("Ratchet", &OPS_Ratchet));
@@ -1206,3 +1210,5 @@ int OPS_unloadingRule() {
 
   return 0;
 }
+
+

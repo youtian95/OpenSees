@@ -249,6 +249,8 @@
 #define MAT_TAG_SteelFractureDI			218 // galvisf
 #define MAT_TAG_Masonry 219
 #define MAT_TAG_Masonryt 220
+#define MAT_TAG_MasonryShearMat 230
+#define MAT_TAG_MasonryBendingMat 237
 #define MAT_TAG_Trilinwp 221
 #define MAT_TAG_Trilinwp2 222
 #define MAT_TAG_Trilinwpd 223
@@ -1275,3 +1277,4 @@
 #define CHANNEL_TAGS_FileDatastore	  1
 
 #endif
+

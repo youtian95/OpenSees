@@ -152,6 +152,8 @@ OBJS       = UniaxialMaterial.o \
 	SMAMaterial.o \
 	Masonry.o \
 	Masonryt.o \
+	MasonryShearMat.o \
+	MasonryBendingMat.o \
 	Trilinwpd.o \
 	Trilinwp.o \
 	Trilinwp2.o \
@@ -205,3 +207,4 @@ spotless: clean
 wipe: spotless
 
 # DO NOT DELETE THIS LINE -- make depend depends on it.
+

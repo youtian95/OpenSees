@@ -150,6 +150,8 @@
 #include "FRPConfinedConcrete.h"
 #include "ConcreteCM.h"
 #include "BarSlipMaterial.h"
+#include "MasonryShearMat.h"
+#include "MasonryBendingMat.h"
 
 #include <HystereticPoly.h>					// Salvatore Sessa 14-Jan-2021
 #include <HystereticSmooth.h>					// Salvatore Sessa Apr-19-2022
@@ -2081,7 +2083,13 @@ FEM_ObjectBrokerAllClasses::getNewUniaxialMaterial(int classTag)
 	    return new ConcreteCM();
 	    
 	case MAT_TAG_BarSlip:
-	    return new BarSlipMaterial();
+		return new BarSlipMaterial();
+
+	case MAT_TAG_MasonryShearMat:
+		return new MasonryShearMat();
+
+	case MAT_TAG_MasonryBendingMat:
+		return new MasonryBendingMat();
 		    
 	case MAT_TAG_HystereticPoly:			// Salvatore Sessa
 	    return new HystereticPoly();

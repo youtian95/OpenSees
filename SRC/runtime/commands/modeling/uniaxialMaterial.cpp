@@ -56,6 +56,8 @@
 #include <Trilinwp.h>
 #include <Trilinwp2.h>
 #include <Masonryt.h>
+#include <MasonryShearMat.h>
+#include <MasonryBendingMat.h>
 
 #include <Vector.h>
 #include <string.h>
@@ -125,6 +127,8 @@ extern OPS_Routine OPS_Masonry;
 extern OPS_Routine OPS_Trilinwp;
 extern OPS_Routine OPS_Trilinwp2;
 extern OPS_Routine OPS_Masonryt;
+extern OPS_Routine OPS_MasonryShearMat;
+extern OPS_Routine OPS_MasonryBendingMat;
 
 // extern int TclCommand_ConfinedConcrete02(ClientData clientData, Tcl_Interp
 // *interp, int argc, 					 TCL_Char ** const argv, TclBasicBuilder *theTclBuilder);
@@ -2083,3 +2087,5 @@ TclBasicBuilderUniaxialMaterialCommand(ClientData clientData, Tcl_Interp *interp
 
   return TCL_OK;
 }
+
+

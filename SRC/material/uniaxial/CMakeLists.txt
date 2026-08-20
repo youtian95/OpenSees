@@ -331,12 +331,16 @@ target_sources(OPS_Material
   PRIVATE
    Masonry.cpp
    Masonryt.cpp
+   MasonryShearMat.cpp
+   MasonryBendingMat.cpp
    Trilinwp.cpp
    Trilinwp2.cpp
    Trilinwpd.cpp
   PUBLIC
    Masonry.h
    Masonryt.h
+   MasonryShearMat.h
+   MasonryBendingMat.h
    Trilinwp.h
    Trilinwp2.h
    Trilinwpd.h
@@ -372,6 +376,8 @@ add_subdirectory(PY)
 add_subdirectory(snap)
 add_subdirectory(fedeas)
 add_subdirectory(drain)
+
+
 
 
 
