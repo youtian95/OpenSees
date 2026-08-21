@@ -149,6 +149,9 @@ MasonryShearMat::setTrialStrain(double strain, double strainRate)
     case RELOADING_FROM_UNLOADING_1: ruleFromReloadingFromUnloading1(); break;
   }
 
+  // 应力计算完成后再积分当前试增量的外力功，提交失败时会随试状态一起回滚。
+  accumulateCycleWork();
+
   return 0;
 }
 
@@ -196,8 +199,8 @@ MasonryShearMat::getCopy(void)
 int
 MasonryShearMat::sendSelf(int commitTag, Channel &theChannel)
 {
-  // 打包布局: data(0)=材料tag; data(1..9)=材料参数; data(10..21)=已提交状态全字段
-  static Vector data(22);
+  // 打包布局: data(0)=材料tag; data(1..9)=材料参数; data(10..25)=已提交状态全字段
+  static Vector data(26);
   data(0) = this->getTag();
   // 材料参数
   data(1) = Ke;     data(2) = Vmax;   data(3) = uu;
@@ -216,6 +219,10 @@ MasonryShearMat::sendSelf(int commitTag, Channel &theChannel)
   data(19) = cState.revStress;
   data(20) = cState.tgtStrain;
   data(21) = cState.tgtStress;
+  data(22) = cState.cycleStartStrain;
+  data(23) = cState.cycleStartStress;
+  data(24) = cState.cycleStartDir;
+  data(25) = cState.cycleWork;
 
   int res = theChannel.sendVector(this->getDbTag(), commitTag, data);
   if (res < 0)
@@ -227,7 +234,7 @@ MasonryShearMat::sendSelf(int commitTag, Channel &theChannel)
 int
 MasonryShearMat::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker)
 {
-  static Vector data(22);
+  static Vector data(26);
   int res = theChannel.recvVector(this->getDbTag(), commitTag, data);
   if (res < 0) {
     opserr << "MasonryShearMat::recvSelf() - failed to receive data\n";
@@ -256,6 +263,10 @@ MasonryShearMat::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &
   cState.revStress  = data(19);
   cState.tgtStrain  = data(20);
   cState.tgtStress  = data(21);
+  cState.cycleStartStrain = data(22);
+  cState.cycleStartStress = data(23);
+  cState.cycleStartDir = data(24);
+  cState.cycleWork = data(25);
   // 用已提交状态初始化试状态
   tState = cState;
   return 0;
@@ -547,6 +558,11 @@ void MasonryShearMat::ruleFromHardening1() {
     // 更新应力和切线刚度
     tState.tangent = computeUnload1Tangent(cState);
     tState.stress = tState.tangent * (tState.strain - cState.strain) + cState.stress;
+    // 从骨架反转时开启新的耗能回路。
+    tState.cycleStartStrain = cState.strain;
+    tState.cycleStartStress = cState.stress;
+    tState.cycleStartDir = cState.strain >= 0.0 ? 1.0 : -1.0;
+    tState.cycleWork = 0.0;
     // 更新反转点历史变量
     tState.revStrain = cState.strain;
     tState.revStress = cState.stress;
@@ -570,6 +586,11 @@ void MasonryShearMat::ruleFromHardening2() {
     // 更新应力和切线刚度
     tState.tangent = computeUnload1Tangent(cState);
     tState.stress = tState.tangent * (tState.strain - cState.strain) + cState.stress;
+    // 从骨架反转时开启新的耗能回路。
+    tState.cycleStartStrain = cState.strain;
+    tState.cycleStartStress = cState.stress;
+    tState.cycleStartDir = cState.strain >= 0.0 ? 1.0 : -1.0;
+    tState.cycleWork = 0.0;
     // 更新反转点历史变量
     tState.revStrain = cState.strain;
     tState.revStress = cState.stress;
@@ -587,15 +608,8 @@ void MasonryShearMat::ruleFromUnloading1() {
     const double strainDir = (tState.strain - cState.strain) >= 0.0 ? 1.0 : -1.0;
     intersectionWithBackbone(cState.strain, cState.stress, cState.tangent, strainDir, tState.tgtStrain, tState.tgtStress);
   } else if (tState.branch == UNLOADING_2) {
-    // 更新目标点
-    double targetTangent;
-    if ((tState.strain - cState.strain) < 0.0) {
-      tState.tgtStrain = cState.umaxNeg;
-      backbone(tState.tgtStrain, tState.tgtStress, targetTangent);
-    } else {
-      tState.tgtStrain = cState.umaxPos;
-      backbone(tState.tgtStrain, tState.tgtStress, targetTangent);
-    }
+    // 以未退化历史最大位移闭合耗能回路，再设置强度退化后的目标点。
+    setUnloading2Target(tState, cState);
     // 更新应力和切线刚度
     tState.tangent = (tState.tgtStress - cState.stress) / (tState.tgtStrain - cState.strain);
     tState.stress = cState.stress + tState.tangent * (tState.strain - cState.strain);
@@ -621,16 +635,8 @@ void MasonryShearMat::ruleFromUnloading2() {
       // 更新反转点
       tState.revStrain = cState.strain;
       tState.revStress = cState.stress;
-      // 更新目标点
-      if ((tState.strain - cState.strain) < 0.0) {
-        tState.tgtStrain = cState.umaxNeg;
-        double targetTangent;
-        backbone(tState.tgtStrain, tState.tgtStress, targetTangent);
-      } else {
-        tState.tgtStrain = cState.umaxPos;
-        double targetTangent;
-        backbone(tState.tgtStrain, tState.tgtStress, targetTangent);
-      }
+      // 以未退化历史最大位移闭合耗能回路，再设置强度退化后的目标点。
+      setUnloading2Target(tState, cState);
     }
   } else if (tState.branch == HARDENING_1 || tState.branch == HARDENING_2) {
     // 更新应力和切线刚度
@@ -670,4 +676,66 @@ double MasonryShearMat::computeUnload1Tangent(const State &state) {
   // 在屈服点取Ke，在极限位移点取alpha*Ke，两个骨架硬化阶段使用同一条连续关系。
   const double Ck = (alpha - 1.0) / (uu / uy - 1.0);
   return Ke * (1.0 + Ck * (std::fabs(state.strain) / uy - 1.0));
+}
+
+double MasonryShearMat::backboneWork(double strain) const {
+  // 骨架曲线关于原点反对称，因此从零点到正、负同幅值位移的功相同。
+  const double absoluteStrain = std::fabs(strain);
+  if (absoluteStrain <= uy)
+    return 0.5 * Ke * absoluteStrain * absoluteStrain;
+
+  const double workAtYield = 0.5 * Vy * uy;
+  const double hardening1Tangent = (Vmax - Vy) / (umax - uy);
+  if (absoluteStrain <= umax) {
+    const double du1 = absoluteStrain - uy;
+    return workAtYield + Vy * du1 + 0.5 * hardening1Tangent * du1 * du1;
+  }
+
+  const double hardening1Length = umax - uy;
+  const double workAtPeak = workAtYield + Vy * hardening1Length + 0.5 * hardening1Tangent * hardening1Length * hardening1Length;
+  const double hardening2Tangent = (Vu - Vmax) / (uu - umax);
+  double hardening2Length = absoluteStrain - umax;
+  if (hardening2Tangent < 0.0)
+    hardening2Length = std::min(hardening2Length, -Vmax / hardening2Tangent);
+  return workAtPeak + Vmax * hardening2Length + 0.5 * hardening2Tangent * hardening2Length * hardening2Length;
+}
+
+void MasonryShearMat::setUnloading2Target(State &state, const State &origin) {
+  // 先取得不考虑强度退化时的历史最大位移目标。
+  const double originalTargetStrain = state.ldir > 0.0 ? origin.umaxPos : origin.umaxNeg;
+  double originalTargetStress = 0.0;
+  double originalTargetTangent = 0.0;
+  backbone(originalTargetStrain, originalTargetStress, originalTargetTangent);
+
+  // 用当前路径、通向原目标的第二卸载段以及返回回路起点的骨架段闭合回路。
+  double cycleEnergy = 0.0;
+  if (origin.cycleStartDir != 0.0) {
+    const double projectedWork = 0.5 * (origin.stress + originalTargetStress) * (originalTargetStrain - origin.strain);
+    const double closingBackboneWork = backboneWork(origin.cycleStartStrain) - backboneWork(originalTargetStrain);
+    cycleEnergy = std::fabs(origin.cycleWork + projectedWork + closingBackboneWork);
+  }
+
+  // 峰值以前向外移动目标会提高强度，因此强度退化只在原目标达到峰值位移后启用。
+  const double degradationIncrement = std::fabs(originalTargetStrain) >= umax ? beta * cycleEnergy / Vmax : 0.0;
+  state.tgtStrain = originalTargetStrain + (originalTargetStrain >= 0.0 ? degradationIncrement : -degradationIncrement);
+  double targetTangent = 0.0;
+  backbone(state.tgtStrain, state.tgtStress, targetTangent);
+}
+
+void MasonryShearMat::accumulateCycleWork() {
+  // 未从骨架开启耗能回路时不累计单调加载功。
+  if (tState.cycleStartDir == 0.0)
+    return;
+
+  const double strainIncrement = tState.strain - cState.strain;
+  if (std::fabs(strainIncrement) > 1.0e-14)
+    tState.cycleWork += 0.5 * (cState.stress + tState.stress) * strainIncrement;
+
+  // 回到骨架后结束当前耗能回路并清除临时累计量。
+  if (tState.branch == HARDENING_1 || tState.branch == HARDENING_2 || tState.branch == ELASTIC) {
+    tState.cycleStartStrain = 0.0;
+    tState.cycleStartStress = 0.0;
+    tState.cycleStartDir = 0.0;
+    tState.cycleWork = 0.0;
+  }
 }

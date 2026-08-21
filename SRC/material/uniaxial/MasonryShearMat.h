@@ -90,6 +90,10 @@ class MasonryShearMat : public UniaxialMaterial
         double umaxNeg = 0.0;   // 负向历史最大应变
         double revStrain = 0.0, revStress = 0.0;      // 反转点: 卸载线的起点
         double tgtStrain = 0.0, tgtStress = 0.0;  // 反向加载的目标点
+        double cycleStartStrain = 0.0;  // 当前耗能回路起点位移
+        double cycleStartStress = 0.0;  // 当前耗能回路起点剪力
+        double cycleStartDir = 0.0;     // 当前耗能回路是否激活及其起点方向
+        double cycleWork = 0.0;         // 从回路起点至当前状态的有符号外力功
     };
 
     State tState;    // 试状态(当前迭代步)
@@ -102,6 +106,12 @@ class MasonryShearMat : public UniaxialMaterial
     void intersectionWithBackbone(double Strain, double Stress, double Tangent, double StrainDir, double &tgtStrain, double &tgtStress);
     // 计算卸载段1的刚度
     double computeUnload1Tangent(const State &state);
+    // 计算从零点到指定骨架位移的功
+    double backboneWork(double strain) const;
+    // 根据原历史最大位移和当前回路耗能设置第二卸载阶段的退化目标
+    void setUnloading2Target(State &state, const State &origin);
+    // 将当前试增量的外力功累计到回路耗能状态
+    void accumulateCycleWork();
 
     // 状态清零函数: 返回一个全零的状态, 仅切线刚度为 Ke
     State initialState() const;
