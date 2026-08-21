@@ -545,8 +545,8 @@ void MasonryShearMat::ruleFromHardening1() {
     tState.umaxNeg = std::min(tState.umaxNeg, tState.strain);
   } else if (tState.branch == UNLOADING_1) {
     // 更新应力和切线刚度
-    tState.stress = alpha * Ke * (tState.strain - cState.strain) + cState.stress;
-    tState.tangent = alpha * Ke;
+    tState.tangent = computeUnload1Tangent(cState);
+    tState.stress = tState.tangent * (tState.strain - cState.strain) + cState.stress;
     // 更新反转点历史变量
     tState.revStrain = cState.strain;
     tState.revStress = cState.stress;
@@ -568,8 +568,8 @@ void MasonryShearMat::ruleFromHardening2() {
     tState.umaxNeg = std::min(tState.umaxNeg, tState.strain);
   } else if (tState.branch == UNLOADING_1) {
     // 更新应力和切线刚度
-    tState.stress = alpha * Ke * (tState.strain - cState.strain) + cState.stress;
-    tState.tangent = alpha * Ke;
+    tState.tangent = computeUnload1Tangent(cState);
+    tState.stress = tState.tangent * (tState.strain - cState.strain) + cState.stress;
     // 更新反转点历史变量
     tState.revStrain = cState.strain;
     tState.revStress = cState.stress;
@@ -616,7 +616,7 @@ void MasonryShearMat::ruleFromUnloading2() {
     } else {
       // 反向加载
       // 更新应力和切线刚度
-      tState.tangent = alpha * Ke;
+      tState.tangent = computeUnload1Tangent(cState);
       tState.stress = cState.stress + tState.tangent * (tState.strain - cState.strain);
       // 更新反转点
       tState.revStrain = cState.strain;
@@ -641,7 +641,7 @@ void MasonryShearMat::ruleFromUnloading2() {
   } else if (tState.branch == UNLOADING_1) {
     // 反向加载
     // 更新应力和切线刚度
-    tState.tangent = alpha * Ke;
+    tState.tangent = computeUnload1Tangent(cState);
     tState.stress = cState.stress + tState.tangent * (tState.strain - cState.strain);
     // 更新反转点
     tState.revStrain = cState.strain;
@@ -660,7 +660,14 @@ void MasonryShearMat::ruleFromReloadingFromUnloading1() {
     tState.umaxPos = std::max(tState.umaxPos, tState.strain);
     tState.umaxNeg = std::min(tState.umaxNeg, tState.strain);
   } else if (tState.branch == UNLOADING_1) {
-    // 更新应力
-    tState.stress = cState.tangent * (tState.strain - cState.strain) + cState.stress;
+    // 以当前反转点重新计算第一卸载段刚度和应力。
+    tState.tangent = computeUnload1Tangent(cState);
+    tState.stress = tState.tangent * (tState.strain - cState.strain) + cState.stress;
   }
+}
+
+double MasonryShearMat::computeUnload1Tangent(const State &state) {
+  // 在屈服点取Ke，在极限位移点取alpha*Ke，两个骨架硬化阶段使用同一条连续关系。
+  const double Ck = (alpha - 1.0) / (uu / uy - 1.0);
+  return Ke * (1.0 + Ck * (std::fabs(state.strain) / uy - 1.0));
 }

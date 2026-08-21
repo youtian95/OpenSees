@@ -54,7 +54,7 @@ class MasonryShearMat : public UniaxialMaterial
     double R_Vy;    // 屈服力与Vmax的比值
     double R_Vu;    // 极限位移对应剪力与Vmax比值
     double R_umax;  // 最大剪切力对应位移与uu的比值
-    double alpha;   // 卸载刚度与弹性刚度之比
+    double alpha;   // 极限位移点卸载刚度与弹性刚度之比
     double gamma;   // 卸载转折点力与卸载点力之比
     double beta;    // 强度退化系数
 
@@ -100,6 +100,8 @@ class MasonryShearMat : public UniaxialMaterial
     void backbone(double u, double &V, double &Et);
     // 计算射线与骨架曲线的交点
     void intersectionWithBackbone(double Strain, double Stress, double Tangent, double StrainDir, double &tgtStrain, double &tgtStress);
+    // 计算卸载段1的刚度
+    double computeUnload1Tangent(const State &state);
 
     // 状态清零函数: 返回一个全零的状态, 仅切线刚度为 Ke
     State initialState() const;
