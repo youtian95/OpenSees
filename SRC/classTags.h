@@ -907,6 +907,8 @@
 #define ELE_TAG_Pipe                      269
 #define ELE_TAG_CurvedPipe                      270
 #define ELE_TAG_PML3DVISCOUS               271 // Amin Pakzad
+#define ELE_TAG_MasonryMacro2D              272
+#define ELE_TAG_MasonryMacro3D              273
 
 
 #define FRN_TAG_Coulomb            1
@@ -1277,4 +1279,3 @@
 #define CHANNEL_TAGS_FileDatastore	  1
 
 #endif
-

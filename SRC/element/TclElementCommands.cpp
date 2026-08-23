@@ -211,6 +211,7 @@ extern void* OPS_LehighJoint2d(void);
 extern void *OPS_MasonPan12(void);
 extern void *OPS_MasonPan3D(void);
 extern void *OPS_BeamGT(void);
+extern void *OPS_MasonryMacro(void);
 extern void *OPS_BeamWithHinges(void);
 extern void *OPS_MixedBeamColumn2d(void);
 extern void *OPS_MixedBeamColumn3d(void);
@@ -979,6 +980,17 @@ TclModelBuilderElementCommand(ClientData clientData, Tcl_Interp *interp,
 		  return TCL_ERROR;
 	  }
 
+
+  } else if ((strcmp(argv[1], "masonryMacro") == 0) || (strcmp(argv[1], "MasonryMacro") == 0)) {
+
+	  void *theEle = OPS_MasonryMacro();
+
+	  if (theEle != 0)
+		  theElement = (Element *)theEle;
+	  else {
+		  opserr << "TclElementCommand -- unable to create element of type : " << argv[1] << endln;
+		  return TCL_ERROR;
+	  }
 
   } else if ((strcmp(argv[1],"MultiFP2d") == 0) || (strcmp(argv[1],"MultiFPB2d") == 0)){
     

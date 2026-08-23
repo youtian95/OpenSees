@@ -252,6 +252,7 @@ void *OPS_FSIFluidBoundaryElement2D(void);
 void* OPS_MasonPan12(void);
 void* OPS_MasonPan3D(void);
 void* OPS_BeamGT(void);
+void* OPS_MasonryMacro(void);
 void* OPS_PML2D(void);
 void* OPS_PML2D_3(void);
 void* OPS_PML2D_5(void);
@@ -753,6 +754,8 @@ namespace {
 	functionMap.insert(std::make_pair("MasonPan12", &OPS_MasonPan12));
 	functionMap.insert(std::make_pair("MasonPan3D", &OPS_MasonPan3D));
 	functionMap.insert(std::make_pair("BeamGT", &OPS_BeamGT));		
+	functionMap.insert(std::make_pair("masonryMacro", &OPS_MasonryMacro));
+	functionMap.insert(std::make_pair("MasonryMacro", &OPS_MasonryMacro));
 	functionMap.insert(std::make_pair("MultiFP2d", &OPS_MultiFP2d));
 	functionMap.insert(std::make_pair("shell", &OPS_ShellMITC4));
 	functionMap.insert(std::make_pair("Shell", &OPS_ShellMITC4));

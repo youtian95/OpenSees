@@ -2,7 +2,10 @@ include ../../../Makefile.def
 
 OBJS       = MasonPan12.o \
 	MasonPan3D.o \
-	BeamGT.o
+	BeamGT.o \
+	MasonryMacro2D.o \
+	MasonryMacro3D.o \
+	OPS_MasonryMacro.o
 
 all:         $(OBJS)
 
