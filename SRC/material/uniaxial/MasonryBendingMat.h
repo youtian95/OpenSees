@@ -36,6 +36,9 @@ class MasonryBendingMat : public UniaxialMaterial
     double getTangent(void);         // 返回当前试切线刚度
     double getInitialTangent(void);  // 返回初始刚度(Ke)
 
+    // 设置当前试算轴力对应的弯曲骨架峰值；Mmax: 当前试算最大弯矩
+    int setTrialBackbone(double Mmax);
+
     int commitState(void);           // 提交状态: 试状态 -> 已提交状态
     int revertToLastCommit(void);    // 回滚: 用已提交状态恢复试状态
     int revertToStart(void);         // 回滚到初始状态
@@ -49,7 +52,9 @@ class MasonryBendingMat : public UniaxialMaterial
   private:
     // ---- 材料参数 ----
     double Ke;      // 弹性刚度
-    double Mmax;    // 最大弯矩
+    double initialMmax;    // 创建材料时输入的初始最大弯矩
+    double Mmax;           // 当前试算最大弯矩
+    double committedMmax;  // 上一收敛状态的最大弯矩
     double uu;      // 极限弯曲角度
     double R_My;    // 屈服弯矩与Mmax的比值
     double CF;      // 第一段卸载段相对反转点的力下降比
@@ -90,6 +95,8 @@ class MasonryBendingMat : public UniaxialMaterial
     double Kp;                             // 屈服后的骨架刚度
 
     // ---- 辅助函数 ----
+    // 根据当前试算最大弯矩重算屈服弯矩、屈服转角和屈服后刚度
+    void updateDerivedParameters();
     void backbone(double rotation, double &moment, double &tangent);
     State initialState() const;
     // 根据反转点弯矩方向计算第三段卸载的反向屈服转角。

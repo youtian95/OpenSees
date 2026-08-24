@@ -82,16 +82,12 @@ void *OPS_MasonryShearMat(void)
 // 基类必须用 (tag, MAT_TAG_MasonryShearMat) 初始化
 MasonryShearMat::MasonryShearMat(int tag, double _Ke, double _Vmax, double _uu, double _R_Vy, double _R_Vu, double _R_umax, double _alpha, double _gamma, double _beta)
   : UniaxialMaterial(tag, MAT_TAG_MasonryShearMat),
-    Ke(_Ke), Vmax(_Vmax), uu(_uu),
+    Ke(_Ke), initialVmax(_Vmax), Vmax(_Vmax), committedVmax(_Vmax), uu(_uu),
     R_Vy(_R_Vy), R_Vu(_R_Vu), R_umax(_R_umax),
     alpha(_alpha), gamma(_gamma), beta(_beta)
 {
-  // TODO: 如有其他派生参数/历史变量, 在此初始化
-  // 派生参数计算: 屈服力 Vy, 极限位移对应剪力 Vu, 最大剪切力对应位移 umax
-  Vy = R_Vy * Vmax;
-  Vu = R_Vu * Vmax;
-  umax = R_umax * uu;
-  uy = Vy / Ke;
+  // 根据初始骨架峰值计算屈服力、残余力和特征位移。
+  updateDerivedParameters();
   // 历史变量初始化为零
   tState = initialState();
   cState = initialState();
@@ -100,7 +96,7 @@ MasonryShearMat::MasonryShearMat(int tag, double _Ke, double _Vmax, double _uu, 
 // 默认构造函数: 供 FEM_ObjectBroker 在并行/数据库恢复时使用
 MasonryShearMat::MasonryShearMat()
   : UniaxialMaterial(0, MAT_TAG_MasonryShearMat),
-    Ke(0.0), Vmax(0.0), uu(0.0),
+    Ke(0.0), initialVmax(0.0), Vmax(0.0), committedVmax(0.0), uu(0.0),
     R_Vy(0.7), R_Vu(0.8), R_umax(0.5),
     alpha(0.8), gamma(0.6), beta(0.06),
     Vy(0.0), Vu(0.0), umax(0.0), uy(0.0)
@@ -161,11 +157,21 @@ double MasonryShearMat::getStress(void)         { return tState.stress; }
 double MasonryShearMat::getTangent(void)        { return tState.tangent; }
 double MasonryShearMat::getInitialTangent(void) { return Ke; }
 
+// 设置当前试算轴力对应的剪切骨架峰值。
+// Vmax: 当前试算最大剪切力；应在本次 setTrialStrain() 之前调用。
+int MasonryShearMat::setTrialBackbone(double trialVmax)
+{
+  Vmax = trialVmax;
+  updateDerivedParameters();
+  return 0;
+}
+
 // 提交状态: 试状态转为已提交状态
 int
 MasonryShearMat::commitState(void)
 {
   cState = tState;
+  committedVmax = Vmax;
   return 0;
 }
 
@@ -174,6 +180,8 @@ int
 MasonryShearMat::revertToLastCommit(void)
 {
   tState = cState;
+  Vmax = committedVmax;
+  updateDerivedParameters();
   return 0;
 }
 
@@ -181,6 +189,9 @@ MasonryShearMat::revertToLastCommit(void)
 int
 MasonryShearMat::revertToStart(void)
 {
+  Vmax = initialVmax;
+  committedVmax = initialVmax;
+  updateDerivedParameters();
   tState = initialState();
   cState = initialState();
   return 0;
@@ -194,35 +205,36 @@ MasonryShearMat::getCopy(void)
   return new MasonryShearMat(*this);
 }
 
-// 打包发送(并行/数据库): 材料tag + 9个材料参数 + 完整已提交状态
+// 打包发送(并行/数据库): 材料tag + 材料参数 + 已提交骨架峰值 + 完整已提交状态
 // commitTag: 提交标签; theChannel: 通讯通道
 int
 MasonryShearMat::sendSelf(int commitTag, Channel &theChannel)
 {
-  // 打包布局: data(0)=材料tag; data(1..9)=材料参数; data(10..25)=已提交状态全字段
-  static Vector data(26);
+  // 打包布局: data(0)=材料tag; data(1..9)=材料参数; data(10)=已提交骨架峰值; data(11..26)=已提交状态全字段
+  static Vector data(27);
   data(0) = this->getTag();
   // 材料参数
-  data(1) = Ke;     data(2) = Vmax;   data(3) = uu;
+  data(1) = Ke;     data(2) = initialVmax;   data(3) = uu;
   data(4) = R_Vy;   data(5) = R_Vu;   data(6) = R_umax;
   data(7) = alpha;  data(8) = gamma;  data(9) = beta;
+  data(10) = committedVmax;
   // 已提交状态: 基本量 + 当前分支 + 全部历史变量
-  data(10) = cState.strain;
-  data(11) = cState.strainRate;
-  data(12) = cState.stress;
-  data(13) = cState.tangent;
-  data(14) = (int)cState.branch;
-  data(15) = cState.ldir;
-  data(16) = cState.umaxPos;
-  data(17) = cState.umaxNeg;
-  data(18) = cState.revStrain;
-  data(19) = cState.revStress;
-  data(20) = cState.tgtStrain;
-  data(21) = cState.tgtStress;
-  data(22) = cState.cycleStartStrain;
-  data(23) = cState.cycleStartStress;
-  data(24) = cState.cycleStartDir;
-  data(25) = cState.cycleWork;
+  data(11) = cState.strain;
+  data(12) = cState.strainRate;
+  data(13) = cState.stress;
+  data(14) = cState.tangent;
+  data(15) = (int)cState.branch;
+  data(16) = cState.ldir;
+  data(17) = cState.umaxPos;
+  data(18) = cState.umaxNeg;
+  data(19) = cState.revStrain;
+  data(20) = cState.revStress;
+  data(21) = cState.tgtStrain;
+  data(22) = cState.tgtStress;
+  data(23) = cState.cycleStartStrain;
+  data(24) = cState.cycleStartStress;
+  data(25) = cState.cycleStartDir;
+  data(26) = cState.cycleWork;
 
   int res = theChannel.sendVector(this->getDbTag(), commitTag, data);
   if (res < 0)
@@ -234,7 +246,7 @@ MasonryShearMat::sendSelf(int commitTag, Channel &theChannel)
 int
 MasonryShearMat::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker)
 {
-  static Vector data(26);
+  static Vector data(27);
   int res = theChannel.recvVector(this->getDbTag(), commitTag, data);
   if (res < 0) {
     opserr << "MasonryShearMat::recvSelf() - failed to receive data\n";
@@ -242,31 +254,30 @@ MasonryShearMat::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &
   }
   this->setTag((int)data(0));
   // 材料参数
-  Ke = data(1);     Vmax = data(2);   uu = data(3);
+  Ke = data(1);     initialVmax = data(2);   uu = data(3);
   R_Vy = data(4);   R_Vu = data(5);   R_umax = data(6);
   alpha = data(7);  gamma = data(8);  beta = data(9);
-  // 重算派生参数(派生量不传输, 必须由参数重建)
-  Vy = R_Vy * Vmax;
-  Vu = R_Vu * Vmax;
-  umax = R_umax * uu;
-  uy = (Ke > 0.0) ? Vy / Ke : 0.0;
+  committedVmax = data(10);
+  Vmax = committedVmax;
+  // 重算派生参数(派生量不传输, 必须由当前已提交骨架重建)
+  updateDerivedParameters();
   // 已提交状态: 基本量 + 当前分支 + 全部历史变量
-  cState.strain     = data(10);
-  cState.strainRate = data(11);
-  cState.stress     = data(12);
-  cState.tangent    = data(13);
-  cState.branch     = (Branch)(int)data(14);
-  cState.ldir       = data(15);
-  cState.umaxPos    = data(16);
-  cState.umaxNeg    = data(17);
-  cState.revStrain  = data(18);
-  cState.revStress  = data(19);
-  cState.tgtStrain  = data(20);
-  cState.tgtStress  = data(21);
-  cState.cycleStartStrain = data(22);
-  cState.cycleStartStress = data(23);
-  cState.cycleStartDir = data(24);
-  cState.cycleWork = data(25);
+  cState.strain     = data(11);
+  cState.strainRate = data(12);
+  cState.stress     = data(13);
+  cState.tangent    = data(14);
+  cState.branch     = (Branch)(int)data(15);
+  cState.ldir       = data(16);
+  cState.umaxPos    = data(17);
+  cState.umaxNeg    = data(18);
+  cState.revStrain  = data(19);
+  cState.revStress  = data(20);
+  cState.tgtStrain  = data(21);
+  cState.tgtStress  = data(22);
+  cState.cycleStartStrain = data(23);
+  cState.cycleStartStress = data(24);
+  cState.cycleStartDir = data(25);
+  cState.cycleWork = data(26);
   // 用已提交状态初始化试状态
   tState = cState;
   return 0;
@@ -278,10 +289,19 @@ void
 MasonryShearMat::Print(OPS_Stream &s, int flag)
 {
   s << "MasonryShearMat tag: " << this->getTag() << endln;
-  s << "  Ke: " << Ke << " Vmax: " << Vmax << " uu: " << uu << endln;
+  s << "  Ke: " << Ke << " initialVmax: " << initialVmax << " Vmax: " << Vmax << " uu: " << uu << endln;
   s << "  R_Vy: " << R_Vy << " R_Vu: " << R_Vu << " R_umax: " << R_umax
     << " alpha: " << alpha << " gamma: " << gamma << " beta: " << beta << endln;
   // TODO: 按需打印更多状态信息
+}
+
+// 根据当前试算最大剪切力更新所有依赖骨架峰值的派生参数。
+void MasonryShearMat::updateDerivedParameters()
+{
+  Vy = R_Vy * Vmax;
+  Vu = R_Vu * Vmax;
+  umax = R_umax * uu;
+  uy = Ke != 0.0 ? Vy / Ke : 0.0;
 }
 
 // 计算骨架曲线上的点

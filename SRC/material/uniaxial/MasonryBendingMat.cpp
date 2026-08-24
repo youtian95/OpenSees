@@ -77,13 +77,11 @@ MasonryBendingMat::MasonryBendingMat(
     int tag, double _Ke, double _Mmax, double _uu, double _R_My,
     double _CF, double _CD, double _gamma1, double _gamma2)
   : UniaxialMaterial(tag, MAT_TAG_MasonryBendingMat),
-    Ke(_Ke), Mmax(_Mmax), uu(_uu), R_My(_R_My),
+    Ke(_Ke), initialMmax(_Mmax), Mmax(_Mmax), committedMmax(_Mmax), uu(_uu), R_My(_R_My),
     CF(_CF), CD(_CD), gamma1(_gamma1), gamma2(_gamma2),
     tState(), cState(), My(0.0), uy(0.0), Kp(0.0)
 {
-  My = R_My * Mmax;
-  uy = Ke > 0.0 ? My / Ke : 0.0;
-  Kp = uu > uy ? (Mmax - My) / (uu - uy) : 0.0;
+  updateDerivedParameters();
   tState = initialState();
   cState = initialState();
 }
@@ -91,7 +89,7 @@ MasonryBendingMat::MasonryBendingMat(
 // 默认构造函数：供 FEM_ObjectBroker 并行/数据库恢复使用。
 MasonryBendingMat::MasonryBendingMat()
   : UniaxialMaterial(0, MAT_TAG_MasonryBendingMat),
-    Ke(0.0), Mmax(0.0), uu(0.008), R_My(0.7),
+    Ke(0.0), initialMmax(0.0), Mmax(0.0), committedMmax(0.0), uu(0.008), R_My(0.7),
     CF(0.2), CD(0.1), gamma1(1.2), gamma2(1.2),
     tState(), cState(), My(0.0), uy(0.0), Kp(0.0)
 {
@@ -140,10 +138,20 @@ double MasonryBendingMat::getStress(void) { return tState.stress; }
 double MasonryBendingMat::getTangent(void) { return tState.tangent; }
 double MasonryBendingMat::getInitialTangent(void) { return Ke; }
 
+// 设置当前试算轴力对应的弯曲骨架峰值。
+// Mmax: 当前试算最大弯矩；应在本次 setTrialStrain() 之前调用。
+int MasonryBendingMat::setTrialBackbone(double trialMmax)
+{
+  Mmax = trialMmax;
+  updateDerivedParameters();
+  return 0;
+}
+
 // 提交试状态。
 int MasonryBendingMat::commitState(void)
 {
   cState = tState;
+  committedMmax = Mmax;
   return 0;
 }
 
@@ -151,12 +159,17 @@ int MasonryBendingMat::commitState(void)
 int MasonryBendingMat::revertToLastCommit(void)
 {
   tState = cState;
+  Mmax = committedMmax;
+  updateDerivedParameters();
   return 0;
 }
 
 // 回滚到初始状态。
 int MasonryBendingMat::revertToStart(void)
 {
+  Mmax = initialMmax;
+  committedMmax = initialMmax;
+  updateDerivedParameters();
   tState = initialState();
   cState = initialState();
   return 0;
@@ -171,20 +184,21 @@ UniaxialMaterial *MasonryBendingMat::getCopy(void)
 // 发送材料参数和完整已提交状态。
 int MasonryBendingMat::sendSelf(int commitTag, Channel &theChannel)
 {
-  // data(0)为材料tag，data(1..8)为参数，data(9..17)为状态。
-  static Vector data(18);
+  // data(0)为材料tag，data(1..8)为参数，data(9)为已提交骨架峰值，data(10..18)为状态。
+  static Vector data(19);
   data(0) = getTag();
-  data(1) = Ke; data(2) = Mmax; data(3) = uu; data(4) = R_My;
+  data(1) = Ke; data(2) = initialMmax; data(3) = uu; data(4) = R_My;
   data(5) = CF; data(6) = CD; data(7) = gamma1; data(8) = gamma2;
-  data(9) = cState.strain;
-  data(10) = cState.strainRate;
-  data(11) = cState.stress;
-  data(12) = cState.tangent;
-  data(13) = static_cast<int>(cState.branch);
-  data(14) = cState.ldir;
-  data(15) = cState.revStrain;
-  data(16) = cState.revStress;
-  data(17) = cState.directUnloading3 ? 1.0 : 0.0;
+  data(9) = committedMmax;
+  data(10) = cState.strain;
+  data(11) = cState.strainRate;
+  data(12) = cState.stress;
+  data(13) = cState.tangent;
+  data(14) = static_cast<int>(cState.branch);
+  data(15) = cState.ldir;
+  data(16) = cState.revStrain;
+  data(17) = cState.revStress;
+  data(18) = cState.directUnloading3 ? 1.0 : 0.0;
 
   int result = theChannel.sendVector(getDbTag(), commitTag, data);
   if (result < 0)
@@ -196,7 +210,7 @@ int MasonryBendingMat::sendSelf(int commitTag, Channel &theChannel)
 int MasonryBendingMat::recvSelf(
     int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker)
 {
-  static Vector data(18);
+  static Vector data(19);
   int result = theChannel.recvVector(getDbTag(), commitTag, data);
   if (result < 0) {
     opserr << "MasonryBendingMat::recvSelf() - failed to receive data\n";
@@ -204,21 +218,21 @@ int MasonryBendingMat::recvSelf(
   }
 
   setTag(static_cast<int>(data(0)));
-  Ke = data(1); Mmax = data(2); uu = data(3); R_My = data(4);
+  Ke = data(1); initialMmax = data(2); uu = data(3); R_My = data(4);
   CF = data(5); CD = data(6); gamma1 = data(7); gamma2 = data(8);
-  My = R_My * Mmax;
-  uy = Ke > 0.0 ? My / Ke : 0.0;
-  Kp = uu > uy ? (Mmax - My) / (uu - uy) : 0.0;
+  committedMmax = data(9);
+  Mmax = committedMmax;
+  updateDerivedParameters();
 
-  cState.strain = data(9);
-  cState.strainRate = data(10);
-  cState.stress = data(11);
-  cState.tangent = data(12);
-  cState.branch = static_cast<Branch>(static_cast<int>(data(13)));
-  cState.ldir = data(14);
-  cState.revStrain = data(15);
-  cState.revStress = data(16);
-  cState.directUnloading3 = data(17) != 0.0;
+  cState.strain = data(10);
+  cState.strainRate = data(11);
+  cState.stress = data(12);
+  cState.tangent = data(13);
+  cState.branch = static_cast<Branch>(static_cast<int>(data(14)));
+  cState.ldir = data(15);
+  cState.revStrain = data(16);
+  cState.revStress = data(17);
+  cState.directUnloading3 = data(18) != 0.0;
   tState = cState;
   return 0;
 }
@@ -227,11 +241,19 @@ int MasonryBendingMat::recvSelf(
 void MasonryBendingMat::Print(OPS_Stream &s, int flag)
 {
   s << "MasonryBendingMat tag: " << getTag() << endln;
-  s << "  Ke: " << Ke << " Mmax: " << Mmax << " uu: " << uu << endln;
+  s << "  Ke: " << Ke << " initialMmax: " << initialMmax << " Mmax: " << Mmax << " uu: " << uu << endln;
   s << "  My: " << My << " uy: " << uy << " Kp: " << Kp << endln;
   s << "  R_My: " << R_My << " CF: " << CF
     << " CD: " << CD << " gamma1: " << gamma1
     << " gamma2: " << gamma2 << endln;
+}
+
+// 根据当前试算最大弯矩更新所有依赖骨架峰值的派生参数。
+void MasonryBendingMat::updateDerivedParameters()
+{
+  My = R_My * Mmax;
+  uy = Ke != 0.0 ? My / Ke : 0.0;
+  Kp = uu > uy ? (Mmax - My) / (uu - uy) : 0.0;
 }
 
 // 计算无退化的双折线弯矩-转角骨架。

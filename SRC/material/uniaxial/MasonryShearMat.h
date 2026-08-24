@@ -36,6 +36,9 @@ class MasonryShearMat : public UniaxialMaterial
     double getTangent(void);         // 返回当前试切线刚度
     double getInitialTangent(void);  // 返回初始刚度(Ke)
 
+    // 设置当前试算轴力对应的剪切骨架峰值；Vmax: 当前试算最大剪切力
+    int setTrialBackbone(double Vmax);
+
     int commitState(void);           // 提交状态: 试状态 -> 已提交状态
     int revertToLastCommit(void);    // 回滚: 用已提交状态恢复试状态
     int revertToStart(void);         // 回滚到初始状态
@@ -49,7 +52,9 @@ class MasonryShearMat : public UniaxialMaterial
   private:
     // ---- 材料参数 ----
     double Ke;      // 弹性刚度
-    double Vmax;    // 最大剪切力
+    double initialVmax;    // 创建材料时输入的初始最大剪切力
+    double Vmax;           // 当前试算最大剪切力
+    double committedVmax;  // 上一收敛状态的最大剪切力
     double uu;      // 极限剪切位移
     double R_Vy;    // 屈服力与Vmax的比值
     double R_Vu;    // 极限位移对应剪力与Vmax比值
@@ -100,6 +105,8 @@ class MasonryShearMat : public UniaxialMaterial
     State cState;   // 已提交状态(上一收敛步)
 
     // ---- 其他辅助私有函数 ----
+    // 根据当前试算最大剪切力重算屈服力、残余力和特征位移
+    void updateDerivedParameters();
     // 骨架曲线计算函数
     void backbone(double u, double &V, double &Et);
     // 计算射线与骨架曲线的交点
