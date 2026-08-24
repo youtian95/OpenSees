@@ -41,7 +41,9 @@ public:
     // contraflexureDistance: pier 端部到反弯点的距离。
     // stressBlockCoefficient: 矩形压应力块系数。
     // frictionCoefficient: 灰缝摩擦系数。
-    MasonryMacro2D(int tag, int nodeI, int nodeJ, UniaxialMaterial &bendingMaterial, UniaxialMaterial &shearMaterial, UniaxialMaterial &axialMaterial, CrdTransf &coordinateTransformation, double width = 0.0, double thickness = 0.0, double compressiveStrength = 0.0, double cohesion = 0.0, double diagonalTensileStrength = 0.0, double contraflexureDistance = 0.0, double stressBlockCoefficient = 0.85, double frictionCoefficient = 0.4);
+    // maximumIterations: 内部剪切变形局部 Newton 迭代的最大次数。
+    // relativeTolerance: 内部平衡残差的相对收敛容差。
+    MasonryMacro2D(int tag, int nodeI, int nodeJ, UniaxialMaterial &bendingMaterial, UniaxialMaterial &shearMaterial, UniaxialMaterial &axialMaterial, CrdTransf &coordinateTransformation, double width = 0.0, double thickness = 0.0, double compressiveStrength = 0.0, double cohesion = 0.0, double diagonalTensileStrength = 0.0, double contraflexureDistance = 0.0, double stressBlockCoefficient = 0.85, double frictionCoefficient = 0.4, int maximumIterations = 100, double relativeTolerance = 1.0e-10);
 
     // 创建供 ObjectBroker 接收数据使用的空对象。
     MasonryMacro2D();
@@ -125,6 +127,10 @@ private:
     double contraflexureDistance;
     double stressBlockCoefficient;
     double frictionCoefficient;
+
+    // 内部剪切变形局部 Newton 求解参数。
+    int maximumIterations;
+    double relativeTolerance;
 
     // 以下对象作为 OpenSees const 引用返回值的持久缓存。
     Matrix tangentStiffness;
