@@ -18,6 +18,7 @@
 #include <Channel.h>
 #include <FEM_ObjectBroker.h>
 #include <Vector.h>
+#include <algorithm>
 #include <cmath>
 
 // 已创建的材料实例数(用于只在首次创建时打印署名横幅)
@@ -161,7 +162,9 @@ double MasonryShearMat::getInitialTangent(void) { return Ke; }
 // Vmax: 当前试算最大剪切力；应在本次 setTrialStrain() 之前调用。
 int MasonryShearMat::setTrialBackbone(double trialVmax)
 {
-  Vmax = trialVmax;
+  // 用初始承载力的百万分之一作为数值下限，避免零承载力导致派生参数除零。
+  const double minimumVmax = 1.0e-6 * initialVmax;
+  Vmax = std::max(trialVmax, minimumVmax);
   updateDerivedParameters();
   return 0;
 }

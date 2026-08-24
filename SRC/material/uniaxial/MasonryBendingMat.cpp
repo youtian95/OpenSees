@@ -16,6 +16,7 @@
 #include <FEM_ObjectBroker.h>
 #include <Vector.h>
 
+#include <algorithm>
 #include <cmath>
 
 // 已创建的材料实例数，用于只在首次创建时打印署名信息。
@@ -142,7 +143,9 @@ double MasonryBendingMat::getInitialTangent(void) { return Ke; }
 // Mmax: 当前试算最大弯矩；应在本次 setTrialStrain() 之前调用。
 int MasonryBendingMat::setTrialBackbone(double trialMmax)
 {
-  Mmax = trialMmax;
+  // 用初始承载力的百万分之一作为数值下限，避免零承载力导致派生参数除零。
+  const double minimumMmax = 1.0e-6 * initialMmax;
+  Mmax = std::max(trialMmax, minimumMmax);
   updateDerivedParameters();
   return 0;
 }

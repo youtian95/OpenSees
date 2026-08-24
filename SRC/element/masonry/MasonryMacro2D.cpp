@@ -421,7 +421,7 @@ int MasonryMacro2D::solveInternalShearDeformationByBisection(double thetaI, doub
     double lowerResidual = centerResidual;
     bool bracketFound = false;
     double searchRadius = std::max(1.0, length) * 1.0e-6;
-    for (int search = 0; search < 20; ++search) {
+    for (int search = 0; search < 50; ++search) {
         const double leftDeformation = initialShearDeformation - searchRadius;
         const double rightDeformation = initialShearDeformation + searchRadius;
         double leftResidual = 0.0;
