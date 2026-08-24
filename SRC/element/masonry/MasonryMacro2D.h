@@ -43,7 +43,7 @@ public:
     // frictionCoefficient: 灰缝摩擦系数。
     // maximumIterations: 内部剪切变形局部 Newton 迭代的最大次数。
     // relativeTolerance: 内部平衡残差的相对收敛容差。
-    MasonryMacro2D(int tag, int nodeI, int nodeJ, UniaxialMaterial &bendingMaterial, UniaxialMaterial &shearMaterial, UniaxialMaterial &axialMaterial, CrdTransf &coordinateTransformation, double width = 0.0, double thickness = 0.0, double compressiveStrength = 0.0, double cohesion = 0.0, double diagonalTensileStrength = 0.0, double contraflexureDistance = 0.0, double stressBlockCoefficient = 0.85, double frictionCoefficient = 0.4, int maximumIterations = 100, double relativeTolerance = 1.0e-10);
+    MasonryMacro2D(int tag, int nodeI, int nodeJ, UniaxialMaterial &bendingMaterial, UniaxialMaterial &shearMaterial, UniaxialMaterial &axialMaterial, CrdTransf &coordinateTransformation, double width = 0.0, double thickness = 0.0, double compressiveStrength = 0.0, double cohesion = 0.0, double diagonalTensileStrength = 0.0, double contraflexureDistance = 0.0, double stressBlockCoefficient = 0.85, double frictionCoefficient = 0.4, int maximumIterations = 30, double relativeTolerance = 1.0e-10);
 
     // 创建供 ObjectBroker 接收数据使用的空对象。
     MasonryMacro2D();
@@ -104,11 +104,34 @@ private:
     // axialForce: 轴向材料当前试算力，拉伸为正、压缩为负。
     int updateMaterialBackbones(double axialForce);
 
-    // 用局部 Newton 法求解满足弯矩平衡的剪切弹簧变形，并把收敛变形写入三个横向材料的 trial 状态。
+    // 先用局部 Newton 法求解满足弯矩平衡的剪切弹簧变形，失败后改用局部括区间二分法，并把收敛变形写入三个横向材料的 trial 状态。
     // thetaI: I 端相对于单元弦的基本试算转角，逆时针为正。
     // thetaJ: J 端相对于单元弦的基本试算转角，逆时针为正。
     // axialForce: 当前轴力，拉伸为正。
     int solveInternalShearDeformation(double thetaI, double thetaJ, double axialForce);
+
+    // 计算指定剪切变形下的局部平衡残差，并更新三个横向材料的 trial 状态。
+    // thetaI: I 端相对于单元弦的基本试算转角，逆时针为正。
+    // thetaJ: J 端相对于单元弦的基本试算转角，逆时针为正。
+    // axialForce: 当前轴力，拉伸为正。
+    // shearDeformation: 剪切弹簧试算变形。
+    // residual: 返回局部平衡残差。
+    // residualScale: 返回用于相对收敛判断的残差量级。
+    int evaluateInternalShearResidual(double thetaI, double thetaJ, double axialForce, double shearDeformation, double &residual, double &residualScale);
+
+    // 使用普通 Newton 法求解内部剪切变形。
+    // thetaI: I 端相对于单元弦的基本试算转角，逆时针为正。
+    // thetaJ: J 端相对于单元弦的基本试算转角，逆时针为正。
+    // axialForce: 当前轴力，拉伸为正。
+    // initialShearDeformation: Newton 迭代的初始剪切变形。
+    int solveInternalShearDeformationByNewton(double thetaI, double thetaJ, double axialForce, double initialShearDeformation);
+
+    // 从初始剪切变形附近寻找异号区间，并使用二分法求解内部剪切变形。
+    // thetaI: I 端相对于单元弦的基本试算转角，逆时针为正。
+    // thetaJ: J 端相对于单元弦的基本试算转角，逆时针为正。
+    // axialForce: 当前轴力，拉伸为正。
+    // initialShearDeformation: 二分搜索的中心剪切变形。
+    int solveInternalShearDeformationByBisection(double thetaI, double thetaJ, double axialForce, double initialShearDeformation);
 
     ID connectedExternalNodes;
     Node *theNodes[2];
@@ -128,7 +151,7 @@ private:
     double stressBlockCoefficient;
     double frictionCoefficient;
 
-    // 内部剪切变形局部 Newton 求解参数。
+    // 内部剪切变形局部求解参数。
     int maximumIterations;
     double relativeTolerance;
 

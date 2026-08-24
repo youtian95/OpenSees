@@ -331,48 +331,150 @@ int MasonryMacro2D::updateMaterialBackbones(double axialForce)
 
 int MasonryMacro2D::solveInternalShearDeformation(double thetaI, double thetaJ, double axialForce)
 {
+    const double initialShearDeformation = shearMaterial->getStrain();
+    if (this->solveInternalShearDeformationByNewton(thetaI, thetaJ, axialForce, initialShearDeformation) == 0) {
+        return 0;
+    }
+    if (this->solveInternalShearDeformationByBisection(thetaI, thetaJ, axialForce, initialShearDeformation) == 0) {
+        return 0;
+    }
+
+    opserr << "MasonryMacro2D::solveInternalShearDeformation - element " << this->getTag() << " did not converge" << endln;
+    return -1;
+}
+
+int MasonryMacro2D::evaluateInternalShearResidual(double thetaI, double thetaJ, double axialForce, double shearDeformation, double &residual, double &residualScale)
+{
     const double length = theCoordTransf->getInitialLength();
-    double shearDeformation = shearMaterial->getStrain();
+    const double rotationI = thetaI + shearDeformation / length;
+    const double rotationJ = thetaJ + shearDeformation / length;
+    int result = shearMaterial->setTrialStrain(shearDeformation);
+    result += bendingMaterials[0]->setTrialStrain(rotationI);
+    result += bendingMaterials[1]->setTrialStrain(rotationJ);
+    if (result != 0) {
+        return result;
+    }
 
+    const double momentI = bendingMaterials[0]->getStress();
+    const double momentJ = bendingMaterials[1]->getStress();
+    const double shearForce = shearMaterial->getStress();
+    residual = momentI + momentJ + shearForce * length - axialForce * shearDeformation;
+    residualScale = std::max(1.0, std::abs(momentI) + std::abs(momentJ) + std::abs(shearForce * length) + std::abs(axialForce * shearDeformation));
+    return 0;
+}
+
+int MasonryMacro2D::solveInternalShearDeformationByNewton(double thetaI, double thetaJ, double axialForce, double initialShearDeformation)
+{
+    const double length = theCoordTransf->getInitialLength();
+    double shearDeformation = initialShearDeformation;
     for (int iteration = 0; iteration < maximumIterations; ++iteration) {
-        // 由兼容方程计算两端弯曲弹簧转角：phi = theta + Delta / L。
-        const double rotationI = thetaI + shearDeformation / length;
-        const double rotationJ = thetaJ + shearDeformation / length;
-
-        int result = shearMaterial->setTrialStrain(shearDeformation);
-        result += bendingMaterials[0]->setTrialStrain(rotationI);
-        result += bendingMaterials[1]->setTrialStrain(rotationJ);
+        double residual = 0.0;
+        double residualScale = 1.0;
+        const int result = this->evaluateInternalShearResidual(thetaI, thetaJ, axialForce, shearDeformation, residual, residualScale);
         if (result != 0) {
             return result;
         }
+        if (std::abs(residual) <= relativeTolerance * residualScale) {
+            return 0;
+        }
 
-        // 局部平衡残差：Mi + Mj + V*L - N*Delta = 0。
-        const double momentI = bendingMaterials[0]->getStress();
-        const double momentJ = bendingMaterials[1]->getStress();
-        const double shearForce = shearMaterial->getStress();
-        const double residual = momentI + momentJ + shearForce * length - axialForce * shearDeformation;
-
-        // 计算残差切线；即使残差已经收敛，也必须先排除无法进行静力凝聚的奇异状态。
         const double tangentI = bendingMaterials[0]->getTangent();
         const double tangentJ = bendingMaterials[1]->getTangent();
         const double shearTangent = shearMaterial->getTangent();
         const double residualTangent = tangentI / length + tangentJ / length + shearTangent * length - axialForce;
         const double tangentScale = std::max(1.0, std::abs(tangentI / length) + std::abs(tangentJ / length) + std::abs(shearTangent * length) + std::abs(axialForce));
         if (std::abs(residualTangent) <= 100.0 * std::numeric_limits<double>::epsilon() * tangentScale) {
-            opserr << "MasonryMacro2D::solveInternalShearDeformation - element " << this->getTag() << " has a singular local tangent" << endln;
-            return -1;
+            break;
         }
 
-        const double residualScale = std::max(1.0, std::abs(momentI) + std::abs(momentJ) + std::abs(shearForce * length) + std::abs(axialForce * shearDeformation));
-        if (std::abs(residual) <= relativeTolerance * residualScale) {
-            return 0;
+        const double correction = residual / residualTangent;
+        if (!std::isfinite(correction)) {
+            break;
         }
+        shearDeformation -= correction;
+    }
+    return -1;
+}
 
-        // 执行一次 Newton 修正。
-        shearDeformation -= residual / residualTangent;
+int MasonryMacro2D::solveInternalShearDeformationByBisection(double thetaI, double thetaJ, double axialForce, double initialShearDeformation)
+{
+    const double length = theCoordTransf->getInitialLength();
+
+    double centerResidual = 0.0;
+    double centerResidualScale = 1.0;
+    int result = this->evaluateInternalShearResidual(thetaI, thetaJ, axialForce, initialShearDeformation, centerResidual, centerResidualScale);
+    if (result != 0) {
+        return result;
+    }
+    if (std::abs(centerResidual) <= relativeTolerance * centerResidualScale) {
+        return 0;
     }
 
-    opserr << "MasonryMacro2D::solveInternalShearDeformation - element " << this->getTag() << " did not converge" << endln;
+    // residualA: 区间 A 端残差。
+    // residualB: 区间 B 端残差。
+    const auto hasSignChange = [](double residualA, double residualB) {
+        return (residualA <= 0.0 && residualB >= 0.0) || (residualA >= 0.0 && residualB <= 0.0);
+    };
+
+    double lowerDeformation = initialShearDeformation;
+    double upperDeformation = initialShearDeformation;
+    double lowerResidual = centerResidual;
+    bool bracketFound = false;
+    double searchRadius = std::max(1.0, length) * 1.0e-6;
+    for (int search = 0; search < 20; ++search) {
+        const double leftDeformation = initialShearDeformation - searchRadius;
+        const double rightDeformation = initialShearDeformation + searchRadius;
+        double leftResidual = 0.0;
+        double rightResidual = 0.0;
+        double trialResidualScale = 1.0;
+        result = this->evaluateInternalShearResidual(thetaI, thetaJ, axialForce, leftDeformation, leftResidual, trialResidualScale);
+        result += this->evaluateInternalShearResidual(thetaI, thetaJ, axialForce, rightDeformation, rightResidual, trialResidualScale);
+        if (result != 0) {
+            return result;
+        }
+
+        const bool leftBracket = hasSignChange(leftResidual, centerResidual);
+        const bool rightBracket = hasSignChange(centerResidual, rightResidual);
+        if (leftBracket || rightBracket) {
+            const double leftEstimatedDistance = leftBracket ? searchRadius * std::abs(centerResidual) / (std::abs(leftResidual) + std::abs(centerResidual)) : std::numeric_limits<double>::max();
+            const double rightEstimatedDistance = rightBracket ? searchRadius * std::abs(centerResidual) / (std::abs(rightResidual) + std::abs(centerResidual)) : std::numeric_limits<double>::max();
+            if (leftEstimatedDistance <= rightEstimatedDistance) {
+                lowerDeformation = leftDeformation;
+                lowerResidual = leftResidual;
+                upperDeformation = initialShearDeformation;
+            } else {
+                lowerDeformation = initialShearDeformation;
+                lowerResidual = centerResidual;
+                upperDeformation = rightDeformation;
+            }
+            bracketFound = true;
+            break;
+        }
+        searchRadius *= 2.0;
+    }
+
+    // 在异号区间内二分，收敛点最后一次材料试算状态即为单元采用的横向状态。
+    if (bracketFound) {
+        for (int iteration = 0; iteration < maximumIterations; ++iteration) {
+            const double middleDeformation = 0.5 * (lowerDeformation + upperDeformation);
+            double middleResidual = 0.0;
+            double middleResidualScale = 1.0;
+            result = this->evaluateInternalShearResidual(thetaI, thetaJ, axialForce, middleDeformation, middleResidual, middleResidualScale);
+            if (result != 0) {
+                return result;
+            }
+            if (std::abs(middleResidual) <= relativeTolerance * middleResidualScale) {
+                return 0;
+            }
+
+            if (hasSignChange(lowerResidual, middleResidual)) {
+                upperDeformation = middleDeformation;
+            } else {
+                lowerDeformation = middleDeformation;
+                lowerResidual = middleResidual;
+            }
+        }
+    }
     return -1;
 }
 
