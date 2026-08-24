@@ -33,7 +33,15 @@ public:
     // shearMaterial: 剪切材料原型。
     // axialMaterial: 轴向材料原型。
     // coordinateTransformation: 二维坐标变换原型。
-    MasonryMacro2D(int tag, int nodeI, int nodeJ, UniaxialMaterial &bendingMaterial, UniaxialMaterial &shearMaterial, UniaxialMaterial &axialMaterial, CrdTransf &coordinateTransformation);
+    // width: pier 墙面内宽度。
+    // thickness: pier 墙厚。
+    // compressiveStrength: 砌体抗压强度。
+    // cohesion: 砌体灰缝黏聚力。
+    // diagonalTensileStrength: 砌体对角抗拉强度。
+    // contraflexureDistance: pier 端部到反弯点的距离。
+    // stressBlockCoefficient: 矩形压应力块系数。
+    // frictionCoefficient: 灰缝摩擦系数。
+    MasonryMacro2D(int tag, int nodeI, int nodeJ, UniaxialMaterial &bendingMaterial, UniaxialMaterial &shearMaterial, UniaxialMaterial &axialMaterial, CrdTransf &coordinateTransformation, double width = 0.0, double thickness = 0.0, double compressiveStrength = 0.0, double cohesion = 0.0, double diagonalTensileStrength = 0.0, double contraflexureDistance = 0.0, double stressBlockCoefficient = 0.85, double frictionCoefficient = 0.4);
 
     // 创建供 ObjectBroker 接收数据使用的空对象。
     MasonryMacro2D();
@@ -90,6 +98,10 @@ public:
     int getResponse(int responseID, Information &information);
 
 private:
+    // 根据当前轴向压力计算弯曲和剪切峰值，并更新三个横向材料的试算骨架。
+    // axialForce: 轴向材料当前试算力，拉伸为正、压缩为负。
+    int updateMaterialBackbones(double axialForce);
+
     // 用局部 Newton 法求解满足弯矩平衡的剪切弹簧变形，并把收敛变形写入三个横向材料的 trial 状态。
     // thetaI: I 端相对于单元弦的基本试算转角，逆时针为正。
     // thetaJ: J 端相对于单元弦的基本试算转角，逆时针为正。
@@ -103,6 +115,16 @@ private:
     UniaxialMaterial *bendingMaterials[2];
     UniaxialMaterial *shearMaterial;
     UniaxialMaterial *axialMaterial;
+
+    // 轴力相关承载力计算参数；width 为零时不启用轴力相关骨架更新。
+    double width;
+    double thickness;
+    double compressiveStrength;
+    double cohesion;
+    double diagonalTensileStrength;
+    double contraflexureDistance;
+    double stressBlockCoefficient;
+    double frictionCoefficient;
 
     // 以下对象作为 OpenSees const 引用返回值的持久缓存。
     Matrix tangentStiffness;

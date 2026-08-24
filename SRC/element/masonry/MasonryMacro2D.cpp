@@ -3,6 +3,8 @@
 // 输入输出：输入节点、材料和坐标变换；输出经过内部剪切变形凝聚后的刚度与恢复力。
 
 #include "MasonryMacro2D.h"
+#include "MasonryBendingMat.h"
+#include "MasonryShearMat.h"
 
 #include <Channel.h>
 #include <CrdTransf.h>
@@ -59,10 +61,12 @@ int receiveMaterial(UniaxialMaterial *&material, int classTag, int dbTag, int co
 
 // 解析二维 masonryMacro 命令并创建单元。
 // 命令格式：element masonryMacro tag iNode jNode bendingMat shearMat axialMat transfTag
+//           <-AxialForceInteraction width thickness fm cohesion ft h0 <kd> <mu>>
 void *OPS_MasonryMacro2D(void)
 {
-    if (OPS_GetNumRemainingInputArgs() != 7) {
-        opserr << "WARNING incorrect arguments: element masonryMacro tag iNode jNode bendingMat shearMat axialMat transfTag" << endln;
+    const int numberOfArguments = OPS_GetNumRemainingInputArgs();
+    if (numberOfArguments != 7 && (numberOfArguments < 14 || numberOfArguments > 16)) {
+        opserr << "WARNING incorrect arguments: element masonryMacro tag iNode jNode bendingMat shearMat axialMat transfTag <-AxialForceInteraction width thickness fm cohesion ft h0 <kd> <mu>>" << endln;
         return 0;
     }
 
@@ -83,11 +87,26 @@ void *OPS_MasonryMacro2D(void)
         return 0;
     }
 
-    return new MasonryMacro2D(integerData[0], integerData[1], integerData[2], *bendingMaterial, *shearMaterial, *axialMaterial, *coordinateTransformation);
+    // 未输入截面和材料参数时保持原行为，不启用轴力相关骨架更新。
+    double interactionData[8] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.85, 0.4};
+    if (numberOfArguments > 7) {
+        const char *option = OPS_GetString();
+        if (std::strcmp(option, "-AxialForceInteraction") != 0) {
+            opserr << "WARNING masonryMacro2D expected -AxialForceInteraction before axial-interaction parameters" << endln;
+            return 0;
+        }
+        int numberOfInteractionData = numberOfArguments - 8;
+        if (OPS_GetDoubleInput(&numberOfInteractionData, interactionData) < 0) {
+            opserr << "WARNING masonryMacro2D failed to read axial-interaction parameters" << endln;
+            return 0;
+        }
+    }
+
+    return new MasonryMacro2D(integerData[0], integerData[1], integerData[2], *bendingMaterial, *shearMaterial, *axialMaterial, *coordinateTransformation, interactionData[0], interactionData[1], interactionData[2], interactionData[3], interactionData[4], interactionData[5], interactionData[6], interactionData[7]);
 }
 
-MasonryMacro2D::MasonryMacro2D(int tag, int nodeI, int nodeJ, UniaxialMaterial &bendingMaterial, UniaxialMaterial &shearMaterialInput, UniaxialMaterial &axialMaterialInput, CrdTransf &coordinateTransformation)
-    : Element(tag, ELE_TAG_MasonryMacro2D), connectedExternalNodes(2), theCoordTransf(coordinateTransformation.getCopy2d()), shearMaterial(shearMaterialInput.getCopy()), axialMaterial(axialMaterialInput.getCopy()), tangentStiffness(6, 6), initialStiffness(6, 6), resistingForce(6)
+MasonryMacro2D::MasonryMacro2D(int tag, int nodeI, int nodeJ, UniaxialMaterial &bendingMaterial, UniaxialMaterial &shearMaterialInput, UniaxialMaterial &axialMaterialInput, CrdTransf &coordinateTransformation, double widthInput, double thicknessInput, double compressiveStrengthInput, double cohesionInput, double diagonalTensileStrengthInput, double contraflexureDistanceInput, double stressBlockCoefficientInput, double frictionCoefficientInput)
+    : Element(tag, ELE_TAG_MasonryMacro2D), connectedExternalNodes(2), theCoordTransf(coordinateTransformation.getCopy2d()), shearMaterial(shearMaterialInput.getCopy()), axialMaterial(axialMaterialInput.getCopy()), width(widthInput), thickness(thicknessInput), compressiveStrength(compressiveStrengthInput), cohesion(cohesionInput), diagonalTensileStrength(diagonalTensileStrengthInput), contraflexureDistance(contraflexureDistanceInput), stressBlockCoefficient(stressBlockCoefficientInput), frictionCoefficient(frictionCoefficientInput), tangentStiffness(6, 6), initialStiffness(6, 6), resistingForce(6)
 {
     connectedExternalNodes(0) = nodeI;
     connectedExternalNodes(1) = nodeJ;
@@ -98,7 +117,7 @@ MasonryMacro2D::MasonryMacro2D(int tag, int nodeI, int nodeJ, UniaxialMaterial &
 }
 
 MasonryMacro2D::MasonryMacro2D()
-    : Element(0, ELE_TAG_MasonryMacro2D), connectedExternalNodes(2), theCoordTransf(0), shearMaterial(0), axialMaterial(0), tangentStiffness(6, 6), initialStiffness(6, 6), resistingForce(6)
+    : Element(0, ELE_TAG_MasonryMacro2D), connectedExternalNodes(2), theCoordTransf(0), shearMaterial(0), axialMaterial(0), width(0.0), thickness(0.0), compressiveStrength(0.0), cohesion(0.0), diagonalTensileStrength(0.0), contraflexureDistance(0.0), stressBlockCoefficient(0.85), frictionCoefficient(0.4), tangentStiffness(6, 6), initialStiffness(6, 6), resistingForce(6)
 {
     theNodes[0] = 0;
     theNodes[1] = 0;
@@ -229,12 +248,58 @@ int MasonryMacro2D::update(void)
 
     // 先更新轴向材料，获得当前平衡方程所需的轴力。
     const double axialDeformation = eleTrialDeformation(0);
-    axialMaterial->setTrialStrain(axialDeformation);
+    result = axialMaterial->setTrialStrain(axialDeformation);
+    if (result != 0) {
+        return result;
+    }
+
+    // 当前轴力先更新弯曲、剪切材料的试算骨架，再求内部剪切变形。
+    result = this->updateMaterialBackbones(axialMaterial->getStress());
     if (result != 0) {
         return result;
     }
 
     return this->solveInternalShearDeformation(eleTrialDeformation(1), eleTrialDeformation(2), axialMaterial->getStress());
+}
+
+int MasonryMacro2D::updateMaterialBackbones(double axialForce)
+{
+    // 旧命令未提供相互作用参数时，不改变材料创建时输入的骨架。
+    if (width == 0.0) {
+        return 0;
+    }
+
+    MasonryBendingMat *bendingMaterialI = dynamic_cast<MasonryBendingMat *>(bendingMaterials[0]);
+    MasonryBendingMat *bendingMaterialJ = dynamic_cast<MasonryBendingMat *>(bendingMaterials[1]);
+    MasonryShearMat *masonryShearMaterial = dynamic_cast<MasonryShearMat *>(shearMaterial);
+    if (bendingMaterialI == 0 || bendingMaterialJ == 0 || masonryShearMaterial == 0) {
+        opserr << "MasonryMacro2D::updateMaterialBackbones - element " << this->getTag() << " requires MasonryBendingMat and MasonryShearMat when axial interaction is enabled" << endln;
+        return -1;
+    }
+
+    // 单元内部轴力以拉伸为正；论文承载力公式中的 P 为正的轴向压力。
+    const double compressionForce = std::max(0.0, -axialForce);
+
+    // 论文式（7）：rocking/crushing 控制的弯矩承载力。
+    const double compressionCapacity = stressBlockCoefficient * width * thickness * compressiveStrength;
+    const double momentCapacity = compressionForce * width / 2.0 * (1.0 - compressionForce / compressionCapacity);
+
+    // 论文式（13）：沿水平灰缝滑移的剪切承载力。
+    double slidingCapacity = 0.0;
+    if (compressionForce > 0.0) {
+        slidingCapacity = (1.5 * width * thickness * cohesion + frictionCoefficient * compressionForce) / (1.0 + 3.0 * contraflexureDistance * thickness * cohesion / compressionForce);
+    }
+
+    // 论文式（14）：对角开裂剪切承载力，形状系数 xi 限制在 1.0～1.5。
+    const double shapeFactor = std::min(std::max(theCoordTransf->getInitialLength() / width, 1.0), 1.5);
+    const double tensileAreaForce = diagonalTensileStrength * width * thickness;
+    const double diagonalCapacity = tensileAreaForce / shapeFactor * std::sqrt(1.0 + compressionForce / tensileAreaForce);
+    const double shearCapacity = std::min(slidingCapacity, diagonalCapacity);
+
+    int result = bendingMaterialI->setTrialBackbone(momentCapacity);
+    result += bendingMaterialJ->setTrialBackbone(momentCapacity);
+    result += masonryShearMaterial->setTrialBackbone(shearCapacity);
+    return result;
 }
 
 int MasonryMacro2D::solveInternalShearDeformation(double thetaI, double thetaJ, double axialForce)
@@ -420,11 +485,19 @@ int MasonryMacro2D::sendSelf(int commitTag, Channel &theChannel)
         idData(6 + 2 * i) = ensureMaterialDbTag(materials[i], theChannel);
     }
 
-    Vector vectorData(4);
+    Vector vectorData(12);
     vectorData(0) = alphaM;
     vectorData(1) = betaK;
     vectorData(2) = betaK0;
     vectorData(3) = betaKc;
+    vectorData(4) = width;
+    vectorData(5) = thickness;
+    vectorData(6) = compressiveStrength;
+    vectorData(7) = cohesion;
+    vectorData(8) = diagonalTensileStrength;
+    vectorData(9) = contraflexureDistance;
+    vectorData(10) = stressBlockCoefficient;
+    vectorData(11) = frictionCoefficient;
 
     if (theChannel.sendID(dataTag, commitTag, idData) < 0 || theChannel.sendVector(dataTag, commitTag, vectorData) < 0 || theCoordTransf->sendSelf(commitTag, theChannel) < 0) {
         return -1;
@@ -442,7 +515,7 @@ int MasonryMacro2D::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroke
 {
     int dataTag = this->getDbTag();
     ID idData(13);
-    Vector vectorData(4);
+    Vector vectorData(12);
     if (theChannel.recvID(dataTag, commitTag, idData) < 0 || theChannel.recvVector(dataTag, commitTag, vectorData) < 0) {
         return -1;
     }
@@ -454,6 +527,14 @@ int MasonryMacro2D::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroke
     betaK = vectorData(1);
     betaK0 = vectorData(2);
     betaKc = vectorData(3);
+    width = vectorData(4);
+    thickness = vectorData(5);
+    compressiveStrength = vectorData(6);
+    cohesion = vectorData(7);
+    diagonalTensileStrength = vectorData(8);
+    contraflexureDistance = vectorData(9);
+    stressBlockCoefficient = vectorData(10);
+    frictionCoefficient = vectorData(11);
     if (theCoordTransf == 0 || theCoordTransf->getClassTag() != idData(3)) {
         delete theCoordTransf;
         theCoordTransf = theBroker.getNewCrdTransf(idData(3));
@@ -491,6 +572,9 @@ int MasonryMacro2D::displaySelf(Renderer &theViewer, int displayMode, float fact
 void MasonryMacro2D::Print(OPS_Stream &s, int flag)
 {
     s << "MasonryMacro2D, element: " << this->getTag() << ", nodes: " << connectedExternalNodes << endln;
+    if (width != 0.0) {
+        s << "  axial interaction: width=" << width << " thickness=" << thickness << " fm=" << compressiveStrength << " cohesion=" << cohesion << " ft=" << diagonalTensileStrength << " h0=" << contraflexureDistance << endln;
+    }
 }
 
 Response *MasonryMacro2D::setResponse(const char **argv, int argc, OPS_Stream &output)
