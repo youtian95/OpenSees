@@ -292,10 +292,12 @@ void
 MasonryShearMat::Print(OPS_Stream &s, int flag)
 {
   s << "MasonryShearMat tag: " << this->getTag() << endln;
-  s << "  Ke: " << Ke << " initialVmax: " << initialVmax << " Vmax: " << Vmax << " uu: " << uu << endln;
+  s << "  Ke: " << Ke << " initialVmax: " << initialVmax << " committedVmax: " << committedVmax << " Vmax: " << Vmax << " uu: " << uu << endln;
   s << "  R_Vy: " << R_Vy << " R_Vu: " << R_Vu << " R_umax: " << R_umax
     << " alpha: " << alpha << " gamma: " << gamma << " beta: " << beta << endln;
-  // TODO: 按需打印更多状态信息
+  s << "  trial: strain=" << tState.strain << " stress=" << tState.stress << " tangent=" << tState.tangent << " branch=" << static_cast<int>(tState.branch) << " direction=" << tState.ldir << endln;
+  s << "  committed: strain=" << cState.strain << " stress=" << cState.stress << " tangent=" << cState.tangent << " branch=" << static_cast<int>(cState.branch) << " direction=" << cState.ldir << endln;
+  s << "  history: revStrain=" << cState.revStrain << " revStress=" << cState.revStress << " targetStrain=" << cState.tgtStrain << " targetStress=" << cState.tgtStress << " umaxPos=" << cState.umaxPos << " umaxNeg=" << cState.umaxNeg << endln;
 }
 
 // 根据当前试算最大剪切力更新所有依赖骨架峰值的派生参数。

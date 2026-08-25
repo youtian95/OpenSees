@@ -42,8 +42,9 @@ public:
     // stressBlockCoefficient: 矩形压应力块系数。
     // frictionCoefficient: 灰缝摩擦系数。
     // maximumIterations: 内部剪切变形局部 Newton 迭代的最大次数。
-    // relativeTolerance: 内部平衡残差的相对收敛容差。
-    MasonryMacro3D(int tag, int nodeI, int nodeJ, UniaxialMaterial &bendingMaterial, UniaxialMaterial &shearMaterial, UniaxialMaterial &axialMaterial, CrdTransf &coordinateTransformation, double width = 0.0, double thickness = 0.0, double compressiveStrength = 0.0, double cohesion = 0.0, double diagonalTensileStrength = 0.0, double contraflexureDistance = 0.0, double stressBlockCoefficient = 0.85, double frictionCoefficient = 0.4, int maximumIterations = 30, double relativeTolerance = 1.0e-10);
+    // relativeTolerance: 内部局部迭代的相对收敛容差。
+    // useDisplacementConvergence: 为 true 时使用剪切变形误差，为 false 时使用力平衡残差。
+    MasonryMacro3D(int tag, int nodeI, int nodeJ, UniaxialMaterial &bendingMaterial, UniaxialMaterial &shearMaterial, UniaxialMaterial &axialMaterial, CrdTransf &coordinateTransformation, double width = 0.0, double thickness = 0.0, double compressiveStrength = 0.0, double cohesion = 0.0, double diagonalTensileStrength = 0.0, double contraflexureDistance = 0.0, double stressBlockCoefficient = 0.85, double frictionCoefficient = 0.4, int maximumIterations = 50, double relativeTolerance = 1.0e-8, bool useDisplacementConvergence = true);
 
     // 创建供 ObjectBroker 接收数据使用的空对象。
     MasonryMacro3D();
@@ -162,6 +163,7 @@ private:
     // 内部剪切变形局部求解参数。
     int maximumIterations;
     double relativeTolerance;
+    bool useDisplacementConvergence;
 
     // 以下对象作为 OpenSees const 引用返回值的持久缓存。
     Matrix tangentStiffness;

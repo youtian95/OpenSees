@@ -244,11 +244,13 @@ int MasonryBendingMat::recvSelf(
 void MasonryBendingMat::Print(OPS_Stream &s, int flag)
 {
   s << "MasonryBendingMat tag: " << getTag() << endln;
-  s << "  Ke: " << Ke << " initialMmax: " << initialMmax << " Mmax: " << Mmax << " uu: " << uu << endln;
+  s << "  Ke: " << Ke << " initialMmax: " << initialMmax << " committedMmax: " << committedMmax << " Mmax: " << Mmax << " uu: " << uu << endln;
   s << "  My: " << My << " uy: " << uy << " Kp: " << Kp << endln;
   s << "  R_My: " << R_My << " CF: " << CF
     << " CD: " << CD << " gamma1: " << gamma1
     << " gamma2: " << gamma2 << endln;
+  s << "  trial: strain=" << tState.strain << " stress=" << tState.stress << " tangent=" << tState.tangent << " branch=" << static_cast<int>(tState.branch) << " direction=" << tState.ldir << endln;
+  s << "  committed: strain=" << cState.strain << " stress=" << cState.stress << " tangent=" << cState.tangent << " branch=" << static_cast<int>(cState.branch) << " direction=" << cState.ldir << endln;
 }
 
 // 根据当前试算最大弯矩更新所有依赖骨架峰值的派生参数。
