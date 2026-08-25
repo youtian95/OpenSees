@@ -1,8 +1,10 @@
-// 模块功能：实现三维砌体宏单元的非核心框架，包括命令解析、节点连接、状态管理、响应和序列化。
-// 使用流程：先定义六类单轴材料和三维 geomTransf，再调用 element masonryMacro 创建本单元。
-// 输入输出：输入节点、材料和坐标变换；核心刚度、恢复力与材料变形映射留在 TODO 中由开发者实现。
+// 模块功能：实现三维局部平面内砌体宏单元，包括命令解析、局部平衡、刚度、恢复力、状态管理和序列化。
+// 使用流程：先定义三类单轴材料和三维 geomTransf，再调用 element masonryMacro 创建本单元。
+// 输入输出：输入两个六自由度节点、三个单轴材料和三维坐标变换；输出只作用于局部 x-y 平面的 12x12 刚度与 12 维恢复力。
 
 #include "MasonryMacro3D.h"
+#include "MasonryBendingMat.h"
+#include "MasonryShearMat.h"
 
 #include <Channel.h>
 #include <CrdTransf.h>
@@ -17,13 +19,16 @@
 #include <UniaxialMaterial.h>
 #include <elementAPI.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace {
 
 // material: 需要分配数据库标签的材料。
 // theChannel: 提供数据库标签的通讯通道。
-int ensureMaterialDbTag3D(UniaxialMaterial *material, Channel &theChannel)
+int ensureMaterialDbTag(UniaxialMaterial *material, Channel &theChannel)
 {
     int dbTag = material->getDbTag();
     if (dbTag == 0) {
@@ -39,7 +44,7 @@ int ensureMaterialDbTag3D(UniaxialMaterial *material, Channel &theChannel)
 // commitTag: 当前提交标签。
 // theChannel: 提供材料数据的通讯通道。
 // theBroker: 创建材料对象的工厂。
-int receiveMaterial3D(UniaxialMaterial *&material, int classTag, int dbTag, int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker)
+int receiveMaterial(UniaxialMaterial *&material, int classTag, int dbTag, int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker)
 {
     if (material == 0 || material->getClassTag() != classTag) {
         delete material;
@@ -54,73 +59,182 @@ int receiveMaterial3D(UniaxialMaterial *&material, int classTag, int dbTag, int 
 
 } // namespace
 
-// 解析三维 masonryMacro 命令并创建单元。
-// 命令格式：element masonryMacro tag iNode jNode bendingYMat bendingZMat shearYMat shearZMat torsionMat axialMat transfTag
+// 解析三维局部平面内 masonryMacro 命令并创建单元。
+// 命令格式：element masonryMacro tag iNode jNode bendingMat shearMat axialMat transfTag
+//           <-AxialForceInteraction width thickness fm cohesion ft h0 <kd> <mu>>
+//           <-LocalIteration maximumIterations relativeTolerance>
 void *OPS_MasonryMacro3D(void)
 {
-    if (OPS_GetNumRemainingInputArgs() != 10) {
-        opserr << "WARNING incorrect arguments: element masonryMacro tag iNode jNode bendingYMat bendingZMat shearYMat shearZMat torsionMat axialMat transfTag" << endln;
+    const int numberOfArguments = OPS_GetNumRemainingInputArgs();
+    if (numberOfArguments < 7) {
+        opserr << "WARNING incorrect arguments: element masonryMacro tag iNode jNode bendingMat shearMat axialMat transfTag <-AxialForceInteraction width thickness fm cohesion ft h0 <kd> <mu>> <-LocalIteration maximumIterations relativeTolerance>" << endln;
         return 0;
     }
 
-    int integerData[10];
-    int numberOfData = 10;
+    int integerData[7];
+    int numberOfData = 7;
     if (OPS_GetIntInput(&numberOfData, integerData) < 0) {
         opserr << "WARNING masonryMacro3D failed to read integer arguments" << endln;
         return 0;
     }
 
-    UniaxialMaterial *bendingYMaterial = OPS_getUniaxialMaterial(integerData[3]);
-    UniaxialMaterial *bendingZMaterial = OPS_getUniaxialMaterial(integerData[4]);
-    UniaxialMaterial *shearYMaterial = OPS_getUniaxialMaterial(integerData[5]);
-    UniaxialMaterial *shearZMaterial = OPS_getUniaxialMaterial(integerData[6]);
-    UniaxialMaterial *torsionMaterial = OPS_getUniaxialMaterial(integerData[7]);
-    UniaxialMaterial *axialMaterial = OPS_getUniaxialMaterial(integerData[8]);
-    CrdTransf *coordinateTransformation = OPS_getCrdTransf(integerData[9]);
+    UniaxialMaterial *bendingMaterial = OPS_getUniaxialMaterial(integerData[3]);
+    UniaxialMaterial *shearMaterial = OPS_getUniaxialMaterial(integerData[4]);
+    UniaxialMaterial *axialMaterial = OPS_getUniaxialMaterial(integerData[5]);
+    CrdTransf *coordinateTransformation = OPS_getCrdTransf(integerData[6]);
 
-    if (bendingYMaterial == 0 || bendingZMaterial == 0 || shearYMaterial == 0 || shearZMaterial == 0 || torsionMaterial == 0 || axialMaterial == 0 || coordinateTransformation == 0) {
+    if (bendingMaterial == 0 || shearMaterial == 0 || axialMaterial == 0 || coordinateTransformation == 0) {
         opserr << "WARNING masonryMacro3D could not find a material or coordinate transformation for element " << integerData[0] << endln;
         return 0;
     }
 
-    return new MasonryMacro3D(integerData[0], integerData[1], integerData[2], *bendingYMaterial, *bendingZMaterial, *shearYMaterial, *shearZMaterial, *torsionMaterial, *axialMaterial, *coordinateTransformation);
+    // 未输入截面和材料参数时保持原行为，不启用轴力相关骨架更新。
+    double interactionData[8] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.85, 0.4};
+    int maximumIterations = 30;
+    double relativeTolerance = 1.0e-10;
+    int remainingArguments = numberOfArguments - 7;
+    while (remainingArguments > 0) {
+        const char *option = OPS_GetString();
+        --remainingArguments;
+
+        if (std::strcmp(option, "-LocalIteration") == 0) {
+            if (remainingArguments < 2) {
+                opserr << "WARNING masonryMacro3D -LocalIteration requires maximumIterations and relativeTolerance" << endln;
+                return 0;
+            }
+            int numberOfData = 1;
+            if (OPS_GetIntInput(&numberOfData, &maximumIterations) < 0 || OPS_GetDoubleInput(&numberOfData, &relativeTolerance) < 0) {
+                opserr << "WARNING masonryMacro3D failed to read -LocalIteration parameters" << endln;
+                return 0;
+            }
+            remainingArguments -= 2;
+            continue;
+        }
+
+        if (std::strcmp(option, "-AxialForceInteraction") != 0) {
+            opserr << "WARNING masonryMacro3D unknown option " << option << endln;
+            return 0;
+        }
+
+        // 若后面还有 -LocalIteration，则为它保留三个输入；否则剩余输入全部属于轴力相关参数。
+        int numberOfInteractionData = remainingArguments > 8 ? remainingArguments - 3 : remainingArguments;
+        if (numberOfInteractionData < 6 || numberOfInteractionData > 8) {
+            opserr << "WARNING masonryMacro3D -AxialForceInteraction requires width thickness fm cohesion ft h0 <kd> <mu>" << endln;
+            return 0;
+        }
+        if (OPS_GetDoubleInput(&numberOfInteractionData, interactionData) < 0) {
+            opserr << "WARNING masonryMacro3D failed to read axial-interaction parameters" << endln;
+            return 0;
+        }
+        remainingArguments -= numberOfInteractionData;
+    }
+
+    return new MasonryMacro3D(integerData[0], integerData[1], integerData[2], *bendingMaterial, *shearMaterial, *axialMaterial, *coordinateTransformation, interactionData[0], interactionData[1], interactionData[2], interactionData[3], interactionData[4], interactionData[5], interactionData[6], interactionData[7], maximumIterations, relativeTolerance);
 }
 
-MasonryMacro3D::MasonryMacro3D(int tag, int nodeI, int nodeJ, UniaxialMaterial &bendingYMaterial, UniaxialMaterial &bendingZMaterial, UniaxialMaterial &shearYMaterialInput, UniaxialMaterial &shearZMaterialInput, UniaxialMaterial &torsionMaterialInput, UniaxialMaterial &axialMaterialInput, CrdTransf &coordinateTransformation)
-    : Element(tag, ELE_TAG_MasonryMacro3D), connectedExternalNodes(2), theCoordTransf(coordinateTransformation.getCopy3d()), shearYMaterial(shearYMaterialInput.getCopy()), shearZMaterial(shearZMaterialInput.getCopy()), torsionMaterial(torsionMaterialInput.getCopy()), axialMaterial(axialMaterialInput.getCopy()), tangentStiffness(12, 12), initialStiffness(12, 12), resistingForce(12)
+MasonryMacro3D::MasonryMacro3D(int tag, int nodeI, int nodeJ, UniaxialMaterial &bendingMaterial, UniaxialMaterial &shearMaterialInput, UniaxialMaterial &axialMaterialInput, CrdTransf &coordinateTransformation, double widthInput, double thicknessInput, double compressiveStrengthInput, double cohesionInput, double diagonalTensileStrengthInput, double contraflexureDistanceInput, double stressBlockCoefficientInput, double frictionCoefficientInput, int maximumIterationsInput, double relativeToleranceInput)
+    : Element(tag, ELE_TAG_MasonryMacro3D), connectedExternalNodes(2), theCoordTransf(coordinateTransformation.getCopy3d()), shearMaterial(shearMaterialInput.getCopy()), axialMaterial(axialMaterialInput.getCopy()), width(widthInput), thickness(thicknessInput), compressiveStrength(compressiveStrengthInput), cohesion(cohesionInput), diagonalTensileStrength(diagonalTensileStrengthInput), contraflexureDistance(contraflexureDistanceInput), stressBlockCoefficient(stressBlockCoefficientInput), frictionCoefficient(frictionCoefficientInput), maximumIterations(maximumIterationsInput), relativeTolerance(relativeToleranceInput), tangentStiffness(12, 12), initialStiffness(12, 12), resistingForce(12)
 {
     connectedExternalNodes(0) = nodeI;
     connectedExternalNodes(1) = nodeJ;
     theNodes[0] = 0;
     theNodes[1] = 0;
-    bendingYMaterials[0] = bendingYMaterial.getCopy();
-    bendingYMaterials[1] = bendingYMaterial.getCopy();
-    bendingZMaterials[0] = bendingZMaterial.getCopy();
-    bendingZMaterials[1] = bendingZMaterial.getCopy();
+    bendingMaterials[0] = bendingMaterial.getCopy();
+    bendingMaterials[1] = bendingMaterial.getCopy();
 }
 
 MasonryMacro3D::MasonryMacro3D()
-    : Element(0, ELE_TAG_MasonryMacro3D), connectedExternalNodes(2), theCoordTransf(0), shearYMaterial(0), shearZMaterial(0), torsionMaterial(0), axialMaterial(0), tangentStiffness(12, 12), initialStiffness(12, 12), resistingForce(12)
+    : Element(0, ELE_TAG_MasonryMacro3D), connectedExternalNodes(2), theCoordTransf(0), shearMaterial(0), axialMaterial(0), width(0.0), thickness(0.0), compressiveStrength(0.0), cohesion(0.0), diagonalTensileStrength(0.0), contraflexureDistance(0.0), stressBlockCoefficient(0.85), frictionCoefficient(0.4), maximumIterations(30), relativeTolerance(1.0e-10), tangentStiffness(12, 12), initialStiffness(12, 12), resistingForce(12)
 {
     theNodes[0] = 0;
     theNodes[1] = 0;
-    bendingYMaterials[0] = 0;
-    bendingYMaterials[1] = 0;
-    bendingZMaterials[0] = 0;
-    bendingZMaterials[1] = 0;
+    bendingMaterials[0] = 0;
+    bendingMaterials[1] = 0;
 }
 
 MasonryMacro3D::~MasonryMacro3D()
 {
     delete theCoordTransf;
-    delete bendingYMaterials[0];
-    delete bendingYMaterials[1];
-    delete bendingZMaterials[0];
-    delete bendingZMaterials[1];
-    delete shearYMaterial;
-    delete shearZMaterial;
-    delete torsionMaterial;
+    delete bendingMaterials[0];
+    delete bendingMaterials[1];
+    delete shearMaterial;
     delete axialMaterial;
+}
+
+int MasonryMacro3D::projectToActivePlane(Matrix &matrix) const
+{
+    Vector xAxis(3);
+    Vector yAxis(3);
+    Vector zAxis(3);
+    if (theCoordTransf == 0 || theCoordTransf->getLocalAxes(xAxis, yAxis, zAxis) != 0) {
+        return -1;
+    }
+
+    // 每个节点仅保留沿局部 x、y 的平动和绕局部 z 的转动。
+    Matrix projector(12, 12);
+    projector.Zero();
+    for (int node = 0; node < 2; ++node) {
+        const int translationOffset = 6 * node;
+        const int rotationOffset = translationOffset + 3;
+        for (int i = 0; i < 3; ++i) {
+            for (int j = 0; j < 3; ++j) {
+                projector(translationOffset + i, translationOffset + j) = xAxis(i) * xAxis(j) + yAxis(i) * yAxis(j);
+                projector(rotationOffset + i, rotationOffset + j) = zAxis(i) * zAxis(j);
+            }
+        }
+    }
+
+    Matrix temporary(12, 12);
+    Matrix projected(12, 12);
+    temporary.Zero();
+    projected.Zero();
+    for (int i = 0; i < 12; ++i) {
+        for (int j = 0; j < 12; ++j) {
+            for (int k = 0; k < 12; ++k) {
+                temporary(i, j) += matrix(i, k) * projector(k, j);
+            }
+        }
+    }
+    for (int i = 0; i < 12; ++i) {
+        for (int j = 0; j < 12; ++j) {
+            for (int k = 0; k < 12; ++k) {
+                projected(i, j) += projector(k, i) * temporary(k, j);
+            }
+        }
+    }
+    matrix = projected;
+    return 0;
+}
+
+int MasonryMacro3D::projectToActivePlane(Vector &vector) const
+{
+    Vector xAxis(3);
+    Vector yAxis(3);
+    Vector zAxis(3);
+    if (theCoordTransf == 0 || theCoordTransf->getLocalAxes(xAxis, yAxis, zAxis) != 0) {
+        return -1;
+    }
+
+    Vector projected(12);
+    projected.Zero();
+    for (int node = 0; node < 2; ++node) {
+        const int translationOffset = 6 * node;
+        const int rotationOffset = translationOffset + 3;
+        double localTranslationX = 0.0;
+        double localTranslationY = 0.0;
+        double localRotationZ = 0.0;
+        for (int i = 0; i < 3; ++i) {
+            localTranslationX += xAxis(i) * vector(translationOffset + i);
+            localTranslationY += yAxis(i) * vector(translationOffset + i);
+            localRotationZ += zAxis(i) * vector(rotationOffset + i);
+        }
+        for (int i = 0; i < 3; ++i) {
+            projected(translationOffset + i) = xAxis(i) * localTranslationX + yAxis(i) * localTranslationY;
+            projected(rotationOffset + i) = zAxis(i) * localRotationZ;
+        }
+    }
+    vector = projected;
+    return 0;
 }
 
 int MasonryMacro3D::getNumExternalNodes(void) const
@@ -178,24 +292,30 @@ int MasonryMacro3D::commitState(void)
 {
     int result = this->Element::commitState();
     result += theCoordTransf->commitState();
-    UniaxialMaterial *materials[8] = {bendingYMaterials[0], bendingYMaterials[1], bendingZMaterials[0], bendingZMaterials[1], shearYMaterial, shearZMaterial, torsionMaterial, axialMaterial};
-    for (int i = 0; i < 8; ++i) result += materials[i]->commitState();
+    result += bendingMaterials[0]->commitState();
+    result += bendingMaterials[1]->commitState();
+    result += shearMaterial->commitState();
+    result += axialMaterial->commitState();
     return result;
 }
 
 int MasonryMacro3D::revertToLastCommit(void)
 {
     int result = theCoordTransf->revertToLastCommit();
-    UniaxialMaterial *materials[8] = {bendingYMaterials[0], bendingYMaterials[1], bendingZMaterials[0], bendingZMaterials[1], shearYMaterial, shearZMaterial, torsionMaterial, axialMaterial};
-    for (int i = 0; i < 8; ++i) result += materials[i]->revertToLastCommit();
+    result += bendingMaterials[0]->revertToLastCommit();
+    result += bendingMaterials[1]->revertToLastCommit();
+    result += shearMaterial->revertToLastCommit();
+    result += axialMaterial->revertToLastCommit();
     return result;
 }
 
 int MasonryMacro3D::revertToStart(void)
 {
     int result = theCoordTransf->revertToStart();
-    UniaxialMaterial *materials[8] = {bendingYMaterials[0], bendingYMaterials[1], bendingZMaterials[0], bendingZMaterials[1], shearYMaterial, shearZMaterial, torsionMaterial, axialMaterial};
-    for (int i = 0; i < 8; ++i) result += materials[i]->revertToStart();
+    result += bendingMaterials[0]->revertToStart();
+    result += bendingMaterials[1]->revertToStart();
+    result += shearMaterial->revertToStart();
+    result += axialMaterial->revertToStart();
     resistingForce.Zero();
     return result;
 }
@@ -207,37 +327,362 @@ int MasonryMacro3D::update(void)
         return result;
     }
 
-    // TODO: 从坐标变换读取三维基本位移，计算轴向、双向剪切、扭转和两方向端部弯曲变形。
-    // TODO: 将计算出的变形直接传给八个材料副本，明确两个弯曲轴和两个剪切方向的符号约定。
+    // 从坐标变换读取节点基本位移，计算轴向、剪切和两端弯曲变形；然后将这些变形传递给对应的材料。
+    //  I -------- J
+    //
+    // 假设两端相对于轴线法线的转角为 thetaI 和 thetaJ （逆时针为正）
+    // 两端节点弹簧的转角为 phiI 和 phiJ （逆时针为正），剪切弹簧的变形为 Delta （J节点在上为正）
+    // 两端节点弯矩为 Mi 和 Mj （逆时针为正），两端节点剪力为 V （向上为正，垂直于刚性杆而不是轴线）
+    // 轴力为 N （拉伸为正，注意不是轴向力，而是平行于刚性杆）；
+    // 严格的轴向力为 N_ax = N * cos(alpha) + V * sin(alpha)，其中 alpha 为刚性杆与轴线的夹角。
+    // sin(alpha) = Delta / L，L 为长度。但是这里近似认为 N_ax = N，忽略了剪切变形对轴向力的影响。
+    //
+    // 那么可以列方程组（其中 phiI, phiJ, Delta 未知）：
+    //
+    //  thetaI = phiI - Delta / L
+    //  thetaJ = phiJ - Delta / L
+    //  Mi(phiI) + Mj(phiJ) + V(Delta) * L =  N * Delta    (平衡方程)
+    //
+    // 将上两个方程代入第三个方程，得到 (仅关于 Delta)：
+    // Mi(thetaI + Delta / L) + Mj(thetaJ + Delta / L) + V(Delta) * L =  N * Delta
+
+    // 获取三维坐标变换的基本位移；仅使用局部 x-y 平面的 [轴向，绕 z 转角 I，绕 z 转角 J]
+    const Vector &eleTrialDeformation = theCoordTransf->getBasicTrialDisp();
+
+    // 先更新轴向材料，获得当前平衡方程所需的轴力。
+    const double axialDeformation = eleTrialDeformation(0);
+    result = axialMaterial->setTrialStrain(axialDeformation);
+    if (result != 0) {
+        return result;
+    }
+
+    // 当前轴力先更新弯曲、剪切材料的试算骨架，再求内部剪切变形。
+    result = this->updateMaterialBackbones(axialMaterial->getStress());
+    if (result != 0) {
+        return result;
+    }
+
+    return this->solveInternalShearDeformation(eleTrialDeformation(1), eleTrialDeformation(2), axialMaterial->getStress());
+}
+
+int MasonryMacro3D::updateMaterialBackbones(double axialForce)
+{
+    // 旧命令未提供相互作用参数时，不改变材料创建时输入的骨架。
+    if (width == 0.0) {
+        return 0;
+    }
+
+    MasonryBendingMat *bendingMaterialI = dynamic_cast<MasonryBendingMat *>(bendingMaterials[0]);
+    MasonryBendingMat *bendingMaterialJ = dynamic_cast<MasonryBendingMat *>(bendingMaterials[1]);
+    MasonryShearMat *masonryShearMaterial = dynamic_cast<MasonryShearMat *>(shearMaterial);
+    if (bendingMaterialI == 0 || bendingMaterialJ == 0 || masonryShearMaterial == 0) {
+        opserr << "MasonryMacro3D::updateMaterialBackbones - element " << this->getTag() << " requires MasonryBendingMat and MasonryShearMat when axial interaction is enabled" << endln;
+        return -1;
+    }
+
+    // 单元内部轴力以拉伸为正；论文承载力公式中的 P 为正的轴向压力。
+    const double compressionForce = std::max(0.0, -axialForce);
+
+    // 论文式（7）：rocking/crushing 控制的弯矩承载力。
+    const double compressionCapacity = stressBlockCoefficient * width * thickness * compressiveStrength;
+    const double momentCapacity = compressionForce * width / 2.0 * (1.0 - compressionForce / compressionCapacity);
+
+    // 论文式（13）：沿水平灰缝滑移的剪切承载力。
+    double slidingCapacity = 0.0;
+    if (compressionForce > 0.0) {
+        slidingCapacity = (1.5 * width * thickness * cohesion + frictionCoefficient * compressionForce) / (1.0 + 3.0 * contraflexureDistance * thickness * cohesion / compressionForce);
+    }
+
+    // 论文式（14）：对角开裂剪切承载力，形状系数 xi 限制在 1.0～1.5。
+    const double shapeFactor = std::min(std::max(theCoordTransf->getInitialLength() / width, 1.0), 1.5);
+    const double tensileAreaForce = diagonalTensileStrength * width * thickness;
+    const double diagonalCapacity = tensileAreaForce / shapeFactor * std::sqrt(1.0 + compressionForce / tensileAreaForce);
+    const double shearCapacity = std::min(slidingCapacity, diagonalCapacity);
+
+    int result = bendingMaterialI->setTrialBackbone(momentCapacity);
+    result += bendingMaterialJ->setTrialBackbone(momentCapacity);
+    result += masonryShearMaterial->setTrialBackbone(shearCapacity);
+    return result;
+}
+
+int MasonryMacro3D::solveInternalShearDeformation(double thetaI, double thetaJ, double axialForce)
+{
+    const double initialShearDeformation = shearMaterial->getStrain();
+    if (this->solveInternalShearDeformationByNewton(thetaI, thetaJ, axialForce, initialShearDeformation) == 0) {
+        return 0;
+    }
+    if (this->solveInternalShearDeformationByBisection(thetaI, thetaJ, axialForce, initialShearDeformation) == 0) {
+        return 0;
+    }
+
+    opserr << "MasonryMacro3D::solveInternalShearDeformation - element " << this->getTag() << " did not converge" << endln;
+    return -1;
+}
+
+int MasonryMacro3D::evaluateInternalShearResidual(double thetaI, double thetaJ, double axialForce, double shearDeformation, double &residual, double &residualScale)
+{
+    const double length = theCoordTransf->getInitialLength();
+    const double rotationI = thetaI + shearDeformation / length;
+    const double rotationJ = thetaJ + shearDeformation / length;
+    int result = shearMaterial->setTrialStrain(shearDeformation);
+    result += bendingMaterials[0]->setTrialStrain(rotationI);
+    result += bendingMaterials[1]->setTrialStrain(rotationJ);
+    if (result != 0) {
+        return result;
+    }
+
+    const double momentI = bendingMaterials[0]->getStress();
+    const double momentJ = bendingMaterials[1]->getStress();
+    const double shearForce = shearMaterial->getStress();
+    residual = momentI + momentJ + shearForce * length - axialForce * shearDeformation;
+    residualScale = std::max(1.0, std::abs(momentI) + std::abs(momentJ) + std::abs(shearForce * length) + std::abs(axialForce * shearDeformation));
     return 0;
 }
 
-const Matrix &MasonryMacro3D::getTangentStiff(void)
+int MasonryMacro3D::solveInternalShearDeformationByNewton(double thetaI, double thetaJ, double axialForce, double initialShearDeformation)
 {
-    // TODO: 用当前材料切线组装三维基本切线刚度，并通过 coordinateTransformation 转换到 12x12 全局刚度。
+    const double length = theCoordTransf->getInitialLength();
+    double shearDeformation = initialShearDeformation;
+    for (int iteration = 0; iteration < maximumIterations; ++iteration) {
+        double residual = 0.0;
+        double residualScale = 1.0;
+        const int result = this->evaluateInternalShearResidual(thetaI, thetaJ, axialForce, shearDeformation, residual, residualScale);
+        if (result != 0) {
+            return result;
+        }
+        if (std::abs(residual) <= relativeTolerance * residualScale) {
+            return 0;
+        }
+
+        const double tangentI = bendingMaterials[0]->getTangent();
+        const double tangentJ = bendingMaterials[1]->getTangent();
+        const double shearTangent = shearMaterial->getTangent();
+        const double residualTangent = tangentI / length + tangentJ / length + shearTangent * length - axialForce;
+        const double tangentScale = std::max(1.0, std::abs(tangentI / length) + std::abs(tangentJ / length) + std::abs(shearTangent * length) + std::abs(axialForce));
+        if (std::abs(residualTangent) <= 100.0 * std::numeric_limits<double>::epsilon() * tangentScale) {
+            break;
+        }
+
+        const double correction = residual / residualTangent;
+        if (!std::isfinite(correction)) {
+            break;
+        }
+        shearDeformation -= correction;
+    }
+    return -1;
+}
+
+int MasonryMacro3D::solveInternalShearDeformationByBisection(double thetaI, double thetaJ, double axialForce, double initialShearDeformation)
+{
+    const double length = theCoordTransf->getInitialLength();
+
+    double centerResidual = 0.0;
+    double centerResidualScale = 1.0;
+    int result = this->evaluateInternalShearResidual(thetaI, thetaJ, axialForce, initialShearDeformation, centerResidual, centerResidualScale);
+    if (result != 0) {
+        return result;
+    }
+    if (std::abs(centerResidual) <= relativeTolerance * centerResidualScale) {
+        return 0;
+    }
+
+    // residualA: 区间 A 端残差。
+    // residualB: 区间 B 端残差。
+    const auto hasSignChange = [](double residualA, double residualB) {
+        return (residualA <= 0.0 && residualB >= 0.0) || (residualA >= 0.0 && residualB <= 0.0);
+    };
+
+    double lowerDeformation = initialShearDeformation;
+    double upperDeformation = initialShearDeformation;
+    double lowerResidual = centerResidual;
+    bool bracketFound = false;
+    double searchRadius = std::max(1.0, length) * 1.0e-6;
+    for (int search = 0; search < 50; ++search) {
+        const double leftDeformation = initialShearDeformation - searchRadius;
+        const double rightDeformation = initialShearDeformation + searchRadius;
+        double leftResidual = 0.0;
+        double rightResidual = 0.0;
+        double trialResidualScale = 1.0;
+        result = this->evaluateInternalShearResidual(thetaI, thetaJ, axialForce, leftDeformation, leftResidual, trialResidualScale);
+        result += this->evaluateInternalShearResidual(thetaI, thetaJ, axialForce, rightDeformation, rightResidual, trialResidualScale);
+        if (result != 0) {
+            return result;
+        }
+
+        const bool leftBracket = hasSignChange(leftResidual, centerResidual);
+        const bool rightBracket = hasSignChange(centerResidual, rightResidual);
+        if (leftBracket || rightBracket) {
+            const double leftEstimatedDistance = leftBracket ? searchRadius * std::abs(centerResidual) / (std::abs(leftResidual) + std::abs(centerResidual)) : std::numeric_limits<double>::max();
+            const double rightEstimatedDistance = rightBracket ? searchRadius * std::abs(centerResidual) / (std::abs(rightResidual) + std::abs(centerResidual)) : std::numeric_limits<double>::max();
+            if (leftEstimatedDistance <= rightEstimatedDistance) {
+                lowerDeformation = leftDeformation;
+                lowerResidual = leftResidual;
+                upperDeformation = initialShearDeformation;
+            } else {
+                lowerDeformation = initialShearDeformation;
+                lowerResidual = centerResidual;
+                upperDeformation = rightDeformation;
+            }
+            bracketFound = true;
+            break;
+        }
+        searchRadius *= 2.0;
+    }
+
+    // 在异号区间内二分，收敛点最后一次材料试算状态即为单元采用的横向状态。
+    if (bracketFound) {
+        for (int iteration = 0; iteration < maximumIterations; ++iteration) {
+            const double middleDeformation = 0.5 * (lowerDeformation + upperDeformation);
+            double middleResidual = 0.0;
+            double middleResidualScale = 1.0;
+            result = this->evaluateInternalShearResidual(thetaI, thetaJ, axialForce, middleDeformation, middleResidual, middleResidualScale);
+            if (result != 0) {
+                return result;
+            }
+            if (std::abs(middleResidual) <= relativeTolerance * middleResidualScale) {
+                return 0;
+            }
+
+            if (hasSignChange(lowerResidual, middleResidual)) {
+                upperDeformation = middleDeformation;
+            } else {
+                lowerDeformation = middleDeformation;
+                lowerResidual = middleResidual;
+            }
+        }
+    }
+    return -1;
+}
+
+const Matrix &MasonryMacro3D::getTangentStiff(void)
+//  用当前材料切线组装基本切线刚度，并通过 coordinateTransformation 转换到 12x12 全局刚度。
+{
+    // Mj = Mj(phiJ) = Mj(thetaJ + Delta / L)
+    // Mi = Mi(phiI) = Mi(thetaI + Delta / L)
+    //
+    // ∂Mj/∂thetaI = Mj' * ∂Delta/∂thetaI / L
+    // ∂Mj/∂thetaJ = Mj' * (1 + ∂Delta/∂thetaJ / L)
+    // ∂Mi/∂thetaI = Mi' * (1 + ∂Delta/∂thetaI / L)
+    // ∂Mi/∂thetaJ = Mi' * ∂Delta/∂thetaJ / L
+    //
+    // 其中 ∂Delta/∂thetaI 和 ∂Delta/∂thetaJ 由平衡方程 Mi(phiI) + Mj(phiJ) + V(Delta) * L =  N * Delta 对 Delta 求导得到：
+    // ∂Delta/∂thetaI = -Mi' / (Mi'/L + Mj'/L + V'*L - N)
+    // ∂Delta/∂thetaJ = -Mj' / (Mi'/L + Mj'/L + V'*L - N)
+    //
+    // 代入上式得到基本切线刚度矩阵：
+    // ∂Mj/∂thetaI = -Mj' * Mi' / (Mi' + Mj' + V'*L^2 - N*L)
+    // ∂Mj/∂thetaJ = Mj' * (1 - Mj' / (Mi' + Mj' + V'*L^2 - N*L))
+    // ∂Mi/∂thetaI = Mi' * (1 - Mi' / (Mi' + Mj' + V'*L^2 - N*L))
+    // ∂Mi/∂thetaJ = -Mi' * Mj' / (Mi' + Mj' + V'*L^2 - N*L)
+
+    Matrix basicStiffness(6, 6);
+    basicStiffness.Zero();
+
+    // 轴向
+    basicStiffness(0, 0) = axialMaterial->getTangent();
+
+    // 横向切线采用冻结当前轴力的近似，忽略轴向变形引起的弯矩增量。
+    const double Mj_prime = bendingMaterials[1]->getTangent();
+    const double Mi_prime = bendingMaterials[0]->getTangent();
+    const double V_prime = shearMaterial->getTangent();
+    const double L = theCoordTransf->getInitialLength();
+    const double N = axialMaterial->getStress();
+    const double condensedDenominator = Mi_prime + Mj_prime + V_prime * L * L - N * L;
+    const double denominatorScale = std::max(1.0, std::abs(Mi_prime) + std::abs(Mj_prime) + std::abs(V_prime * L * L) + std::abs(N * L));
+    if (std::abs(condensedDenominator) <= 100.0 * std::numeric_limits<double>::epsilon() * denominatorScale) {
+        opserr << "MasonryMacro3D::getTangentStiff - element " << this->getTag() << " has a singular condensed tangent" << endln;
+        tangentStiffness.Zero();
+        return tangentStiffness;
+    }
+
+    // 刚度
+    basicStiffness(1, 1) = Mi_prime * (1.0 - Mi_prime / condensedDenominator);
+    basicStiffness(1, 2) = -Mi_prime * Mj_prime / condensedDenominator;
+    basicStiffness(2, 1) = basicStiffness(1, 2);
+    basicStiffness(2, 2) = Mj_prime * (1.0 - Mj_prime / condensedDenominator);
+
+    Vector basicForce(6);
+    basicForce.Zero();
+    basicForce(0) = axialMaterial->getStress();
+    basicForce(1) = bendingMaterials[0]->getStress();
+    basicForce(2) = bendingMaterials[1]->getStress();
+
+    // 通过坐标变换转换为全局刚度矩阵
+    tangentStiffness = theCoordTransf->getGlobalStiffMatrix(basicStiffness, basicForce);
+    if (this->projectToActivePlane(tangentStiffness) != 0) {
+        opserr << "MasonryMacro3D::getTangentStiff - element " << this->getTag() << " failed to obtain local axes" << endln;
+        tangentStiffness.Zero();
+    }
+
     return tangentStiffness;
 }
 
 const Matrix &MasonryMacro3D::getInitialStiff(void)
 {
-    // TODO: 用各材料初始切线组装并缓存 12x12 初始全局刚度。
+    Matrix initialBasicStiffness(6, 6);
+    initialBasicStiffness.Zero();
+
+    const double axialTangent = axialMaterial->getInitialTangent();
+    const double tangentI = bendingMaterials[0]->getInitialTangent();
+    const double tangentJ = bendingMaterials[1]->getInitialTangent();
+    const double shearTangent = shearMaterial->getInitialTangent();
+    const double length = theCoordTransf->getInitialLength();
+    const double condensedDenominator = tangentI + tangentJ + shearTangent * length * length;
+    const double denominatorScale = std::max(1.0, std::abs(tangentI) + std::abs(tangentJ) + std::abs(shearTangent * length * length));
+    if (std::abs(condensedDenominator) <= 100.0 * std::numeric_limits<double>::epsilon() * denominatorScale) {
+        opserr << "MasonryMacro3D::getInitialStiff - element " << this->getTag() << " has a singular initial condensed tangent" << endln;
+        initialStiffness.Zero();
+        return initialStiffness;
+    }
+
+    // 初始状态取 N=0，并对内部剪切变形执行与当前切线相同的静力凝聚。
+    initialBasicStiffness(0, 0) = axialTangent;
+    initialBasicStiffness(1, 1) = tangentI * (1.0 - tangentI / condensedDenominator);
+    initialBasicStiffness(1, 2) = -tangentI * tangentJ / condensedDenominator;
+    initialBasicStiffness(2, 1) = initialBasicStiffness(1, 2);
+    initialBasicStiffness(2, 2) = tangentJ * (1.0 - tangentJ / condensedDenominator);
+
+    initialStiffness = theCoordTransf->getInitialGlobalStiffMatrix(initialBasicStiffness);
+    if (this->projectToActivePlane(initialStiffness) != 0) {
+        opserr << "MasonryMacro3D::getInitialStiff - element " << this->getTag() << " failed to obtain local axes" << endln;
+        initialStiffness.Zero();
+    }
     return initialStiffness;
 }
 
 const Vector &MasonryMacro3D::getResistingForce(void)
+// 从各材料读取当前内力，组装并转换为 12 维全局节点恢复力。
 {
-    // TODO: 从各材料读取当前内力，组装并转换为 12 维全局节点恢复力。
+    // 轴力
+    double axialForce = axialMaterial->getStress();
+    // Mi
+    double momentI = bendingMaterials[0]->getStress();
+    // Mj
+    double momentJ = bendingMaterials[1]->getStress();
+
+    Vector basicForce(6);
+    basicForce.Zero();
+    basicForce (0) = axialForce;
+    basicForce (1) = momentI;
+    basicForce (2) = momentJ;
+
+    Vector elementLoad(6);
+    elementLoad.Zero();
+
+    resistingForce = theCoordTransf->getGlobalResistingForce(basicForce, elementLoad);
+    if (this->projectToActivePlane(resistingForce) != 0) {
+        opserr << "MasonryMacro3D::getResistingForce - element " << this->getTag() << " failed to obtain local axes" << endln;
+        resistingForce.Zero();
+    }
+
     return resistingForce;
 }
 
 int MasonryMacro3D::sendSelf(int commitTag, Channel &theChannel)
 {
-    UniaxialMaterial *materials[8] = {bendingYMaterials[0], bendingYMaterials[1], bendingZMaterials[0], bendingZMaterials[1], shearYMaterial, shearZMaterial, torsionMaterial, axialMaterial};
-    if (theCoordTransf == 0) {
+    if (theCoordTransf == 0 || bendingMaterials[0] == 0 || bendingMaterials[1] == 0 || shearMaterial == 0 || axialMaterial == 0) {
+        opserr << "MasonryMacro3D::sendSelf - element is not fully initialized" << endln;
         return -1;
-    }
-    for (int i = 0; i < 8; ++i) {
-        if (materials[i] == 0) return -1;
     }
 
     int dataTag = this->getDbTag();
@@ -245,38 +690,51 @@ int MasonryMacro3D::sendSelf(int commitTag, Channel &theChannel)
         theCoordTransf->setDbTag(theChannel.getDbTag());
     }
 
-    ID idData(21);
+    ID idData(13);
     idData(0) = this->getTag();
     idData(1) = connectedExternalNodes(0);
     idData(2) = connectedExternalNodes(1);
     idData(3) = theCoordTransf->getClassTag();
     idData(4) = theCoordTransf->getDbTag();
-    for (int i = 0; i < 8; ++i) {
+    UniaxialMaterial *materials[4] = {bendingMaterials[0], bendingMaterials[1], shearMaterial, axialMaterial};
+    for (int i = 0; i < 4; ++i) {
         idData(5 + 2 * i) = materials[i]->getClassTag();
-        idData(6 + 2 * i) = ensureMaterialDbTag3D(materials[i], theChannel);
+        idData(6 + 2 * i) = ensureMaterialDbTag(materials[i], theChannel);
     }
 
-    Vector vectorData(4);
+    Vector vectorData(14);
     vectorData(0) = alphaM;
     vectorData(1) = betaK;
     vectorData(2) = betaK0;
     vectorData(3) = betaKc;
+    vectorData(4) = width;
+    vectorData(5) = thickness;
+    vectorData(6) = compressiveStrength;
+    vectorData(7) = cohesion;
+    vectorData(8) = diagonalTensileStrength;
+    vectorData(9) = contraflexureDistance;
+    vectorData(10) = stressBlockCoefficient;
+    vectorData(11) = frictionCoefficient;
+    vectorData(12) = maximumIterations;
+    vectorData(13) = relativeTolerance;
 
     if (theChannel.sendID(dataTag, commitTag, idData) < 0 || theChannel.sendVector(dataTag, commitTag, vectorData) < 0 || theCoordTransf->sendSelf(commitTag, theChannel) < 0) {
         return -1;
     }
-    for (int i = 0; i < 8; ++i) {
-        if (materials[i]->sendSelf(commitTag, theChannel) < 0) return -1;
+    for (int i = 0; i < 4; ++i) {
+        if (materials[i]->sendSelf(commitTag, theChannel) < 0) {
+            return -1;
+        }
     }
-    // TODO: 若核心模型新增单元级历史变量，应同步扩展这里和 recvSelf 的数据布局。
+    // 当前单元没有额外的单元级历史变量。
     return 0;
 }
 
 int MasonryMacro3D::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker)
 {
     int dataTag = this->getDbTag();
-    ID idData(21);
-    Vector vectorData(4);
+    ID idData(13);
+    Vector vectorData(14);
     if (theChannel.recvID(dataTag, commitTag, idData) < 0 || theChannel.recvVector(dataTag, commitTag, vectorData) < 0) {
         return -1;
     }
@@ -288,25 +746,43 @@ int MasonryMacro3D::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroke
     betaK = vectorData(1);
     betaK0 = vectorData(2);
     betaKc = vectorData(3);
+    width = vectorData(4);
+    thickness = vectorData(5);
+    compressiveStrength = vectorData(6);
+    cohesion = vectorData(7);
+    diagonalTensileStrength = vectorData(8);
+    contraflexureDistance = vectorData(9);
+    stressBlockCoefficient = vectorData(10);
+    frictionCoefficient = vectorData(11);
+    maximumIterations = static_cast<int>(vectorData(12));
+    relativeTolerance = vectorData(13);
     if (theCoordTransf == 0 || theCoordTransf->getClassTag() != idData(3)) {
         delete theCoordTransf;
         theCoordTransf = theBroker.getNewCrdTransf(idData(3));
     }
-    if (theCoordTransf == 0) return -1;
-    theCoordTransf->setDbTag(idData(4));
-    if (theCoordTransf->recvSelf(commitTag, theChannel, theBroker) < 0) return -1;
-
-    UniaxialMaterial **materials[8] = {&bendingYMaterials[0], &bendingYMaterials[1], &bendingZMaterials[0], &bendingZMaterials[1], &shearYMaterial, &shearZMaterial, &torsionMaterial, &axialMaterial};
-    for (int i = 0; i < 8; ++i) {
-        if (receiveMaterial3D(*materials[i], idData(5 + 2 * i), idData(6 + 2 * i), commitTag, theChannel, theBroker) < 0) return -1;
+    if (theCoordTransf == 0) {
+        return -1;
     }
-    // TODO: 若核心模型新增单元级历史变量，应同步扩展这里和 sendSelf 的数据布局。
+    theCoordTransf->setDbTag(idData(4));
+    if (theCoordTransf->recvSelf(commitTag, theChannel, theBroker) < 0) {
+        return -1;
+    }
+
+    UniaxialMaterial **materials[4] = {&bendingMaterials[0], &bendingMaterials[1], &shearMaterial, &axialMaterial};
+    for (int i = 0; i < 4; ++i) {
+        if (receiveMaterial(*materials[i], idData(5 + 2 * i), idData(6 + 2 * i), commitTag, theChannel, theBroker) < 0) {
+            return -1;
+        }
+    }
+    // 当前单元没有额外的单元级历史变量。
     return 0;
 }
 
 int MasonryMacro3D::displaySelf(Renderer &theViewer, int displayMode, float fact, const char **modes, int numModes)
 {
-    if (theNodes[0] == 0 || theNodes[1] == 0) return -1;
+    if (theNodes[0] == 0 || theNodes[1] == 0) {
+        return -1;
+    }
     Vector pointI(3);
     Vector pointJ(3);
     theNodes[0]->getDisplayCrds(pointI, fact, displayMode);
@@ -317,21 +793,27 @@ int MasonryMacro3D::displaySelf(Renderer &theViewer, int displayMode, float fact
 void MasonryMacro3D::Print(OPS_Stream &s, int flag)
 {
     s << "MasonryMacro3D, element: " << this->getTag() << ", nodes: " << connectedExternalNodes << endln;
+    if (width != 0.0) {
+        s << "  axial interaction: width=" << width << " thickness=" << thickness << " fm=" << compressiveStrength << " cohesion=" << cohesion << " ft=" << diagonalTensileStrength << " h0=" << contraflexureDistance << endln;
+    }
+    s << "  local iteration: maximumIterations=" << maximumIterations << " relativeTolerance=" << relativeTolerance << endln;
 }
 
 Response *MasonryMacro3D::setResponse(const char **argv, int argc, OPS_Stream &output)
 {
-    if (argc == 0) return 0;
-    if (std::strcmp(argv[0], "force") == 0 || std::strcmp(argv[0], "globalForce") == 0) return new ElementResponse(this, 1, resistingForce);
-    if (std::strcmp(argv[0], "stiffness") == 0) return new ElementResponse(this, 2, tangentStiffness);
+    if (argc == 0) {
+        return 0;
+    }
+    if (std::strcmp(argv[0], "force") == 0 || std::strcmp(argv[0], "globalForce") == 0) {
+        return new ElementResponse(this, 1, resistingForce);
+    }
+    if (std::strcmp(argv[0], "stiffness") == 0) {
+        return new ElementResponse(this, 2, tangentStiffness);
+    }
     if (std::strcmp(argv[0], "material") == 0 && argc > 2) {
-        if (std::strcmp(argv[1], "bendingYI") == 0) return bendingYMaterials[0]->setResponse(&argv[2], argc - 2, output);
-        if (std::strcmp(argv[1], "bendingYJ") == 0) return bendingYMaterials[1]->setResponse(&argv[2], argc - 2, output);
-        if (std::strcmp(argv[1], "bendingZI") == 0) return bendingZMaterials[0]->setResponse(&argv[2], argc - 2, output);
-        if (std::strcmp(argv[1], "bendingZJ") == 0) return bendingZMaterials[1]->setResponse(&argv[2], argc - 2, output);
-        if (std::strcmp(argv[1], "shearY") == 0) return shearYMaterial->setResponse(&argv[2], argc - 2, output);
-        if (std::strcmp(argv[1], "shearZ") == 0) return shearZMaterial->setResponse(&argv[2], argc - 2, output);
-        if (std::strcmp(argv[1], "torsion") == 0) return torsionMaterial->setResponse(&argv[2], argc - 2, output);
+        if (std::strcmp(argv[1], "bendingI") == 0) return bendingMaterials[0]->setResponse(&argv[2], argc - 2, output);
+        if (std::strcmp(argv[1], "bendingJ") == 0) return bendingMaterials[1]->setResponse(&argv[2], argc - 2, output);
+        if (std::strcmp(argv[1], "shear") == 0) return shearMaterial->setResponse(&argv[2], argc - 2, output);
         if (std::strcmp(argv[1], "axial") == 0) return axialMaterial->setResponse(&argv[2], argc - 2, output);
     }
     return this->Element::setResponse(argv, argc, output);

@@ -1,6 +1,6 @@
-// 模块功能：定义三维砌体宏单元 MasonryMacro3D 的 OpenSees 接口与数据结构。
+// 模块功能：定义三维局部平面内砌体宏单元 MasonryMacro3D 的 OpenSees 接口与数据结构。
 // 使用流程：通过 element masonryMacro 命令创建单元，框架负责节点、材料、坐标变换、状态和并行通讯。
-// 输入输出：输入两个六自由度节点、六类单轴材料和坐标变换；输出 12x12 刚度与 12 维恢复力。
+// 输入输出：输入两个六自由度节点、三类单轴材料和坐标变换；输出 12x12 刚度与 12 维恢复力。
 
 #ifndef MasonryMacro3D_h
 #define MasonryMacro3D_h
@@ -21,22 +21,29 @@ class Renderer;
 class Response;
 class UniaxialMaterial;
 
-// 三维两节点砌体宏单元：每个节点具有 ux、uy、uz、rx、ry、rz 六个自由度。
+// 三维两节点砌体宏单元：每个节点具有六个自由度，但单元只在局部 x-y 平面内工作。
 class MasonryMacro3D : public Element
 {
 public:
-    // 创建供分析使用的三维砌体宏单元。
+    // 创建供分析使用的三维局部平面内砌体宏单元。
     // tag: 单元标签。
     // nodeI: I 端节点标签。
     // nodeJ: J 端节点标签。
-    // bendingYMaterial: 绕局部 y 轴弯曲材料原型，I、J 两端各复制一份。
-    // bendingZMaterial: 绕局部 z 轴弯曲材料原型，I、J 两端各复制一份。
-    // shearYMaterial: 局部 y 方向剪切材料原型。
-    // shearZMaterial: 局部 z 方向剪切材料原型。
-    // torsionMaterial: 绕局部 x 轴扭转材料原型。
-    // axialMaterial: 局部 x 方向轴向材料原型。
-    // coordinateTransformation: 三维坐标变换原型，局部轴方向由 geomTransf 定义。
-    MasonryMacro3D(int tag, int nodeI, int nodeJ, UniaxialMaterial &bendingYMaterial, UniaxialMaterial &bendingZMaterial, UniaxialMaterial &shearYMaterial, UniaxialMaterial &shearZMaterial, UniaxialMaterial &torsionMaterial, UniaxialMaterial &axialMaterial, CrdTransf &coordinateTransformation);
+    // bendingMaterial: 弯曲材料原型，单元为 I、J 两端分别复制一份。
+    // shearMaterial: 剪切材料原型。
+    // axialMaterial: 轴向材料原型。
+    // coordinateTransformation: 三维坐标变换原型，局部 x-y 为单元工作的平面。
+    // width: pier 墙面内宽度。
+    // thickness: pier 墙厚。
+    // compressiveStrength: 砌体抗压强度。
+    // cohesion: 砌体灰缝黏聚力。
+    // diagonalTensileStrength: 砌体对角抗拉强度。
+    // contraflexureDistance: pier 端部到反弯点的距离。
+    // stressBlockCoefficient: 矩形压应力块系数。
+    // frictionCoefficient: 灰缝摩擦系数。
+    // maximumIterations: 内部剪切变形局部 Newton 迭代的最大次数。
+    // relativeTolerance: 内部平衡残差的相对收敛容差。
+    MasonryMacro3D(int tag, int nodeI, int nodeJ, UniaxialMaterial &bendingMaterial, UniaxialMaterial &shearMaterial, UniaxialMaterial &axialMaterial, CrdTransf &coordinateTransformation, double width = 0.0, double thickness = 0.0, double compressiveStrength = 0.0, double cohesion = 0.0, double diagonalTensileStrength = 0.0, double contraflexureDistance = 0.0, double stressBlockCoefficient = 0.85, double frictionCoefficient = 0.4, int maximumIterations = 30, double relativeTolerance = 1.0e-10);
 
     // 创建供 ObjectBroker 接收数据使用的空对象。
     MasonryMacro3D();
@@ -93,16 +100,68 @@ public:
     int getResponse(int responseID, Information &information);
 
 private:
+    // 将全局矩阵投影到局部 x-y 平面的活动自由度，删除局部 z 向平动、绕 x 扭转和绕 y 转动分量。
+    // matrix: 需要原位投影的 12x12 全局矩阵。
+    int projectToActivePlane(Matrix &matrix) const;
+
+    // 将全局向量投影到局部 x-y 平面的活动自由度。
+    // vector: 需要原位投影的 12 维全局向量。
+    int projectToActivePlane(Vector &vector) const;
+
+    // 根据当前轴向压力计算弯曲和剪切峰值，并更新三个横向材料的试算骨架。
+    // axialForce: 轴向材料当前试算力，拉伸为正、压缩为负。
+    int updateMaterialBackbones(double axialForce);
+
+    // 先用局部 Newton 法求解满足弯矩平衡的剪切弹簧变形，失败后改用局部括区间二分法，并把收敛变形写入三个横向材料的 trial 状态。
+    // thetaI: I 端相对于单元弦的基本试算转角，逆时针为正。
+    // thetaJ: J 端相对于单元弦的基本试算转角，逆时针为正。
+    // axialForce: 当前轴力，拉伸为正。
+    int solveInternalShearDeformation(double thetaI, double thetaJ, double axialForce);
+
+    // 计算指定剪切变形下的局部平衡残差，并更新三个横向材料的 trial 状态。
+    // thetaI: I 端相对于单元弦的基本试算转角，逆时针为正。
+    // thetaJ: J 端相对于单元弦的基本试算转角，逆时针为正。
+    // axialForce: 当前轴力，拉伸为正。
+    // shearDeformation: 剪切弹簧试算变形。
+    // residual: 返回局部平衡残差。
+    // residualScale: 返回用于相对收敛判断的残差量级。
+    int evaluateInternalShearResidual(double thetaI, double thetaJ, double axialForce, double shearDeformation, double &residual, double &residualScale);
+
+    // 使用普通 Newton 法求解内部剪切变形。
+    // thetaI: I 端相对于单元弦的基本试算转角，逆时针为正。
+    // thetaJ: J 端相对于单元弦的基本试算转角，逆时针为正。
+    // axialForce: 当前轴力，拉伸为正。
+    // initialShearDeformation: Newton 迭代的初始剪切变形。
+    int solveInternalShearDeformationByNewton(double thetaI, double thetaJ, double axialForce, double initialShearDeformation);
+
+    // 从初始剪切变形附近寻找异号区间，并使用二分法求解内部剪切变形。
+    // thetaI: I 端相对于单元弦的基本试算转角，逆时针为正。
+    // thetaJ: J 端相对于单元弦的基本试算转角，逆时针为正。
+    // axialForce: 当前轴力，拉伸为正。
+    // initialShearDeformation: 二分搜索的中心剪切变形。
+    int solveInternalShearDeformationByBisection(double thetaI, double thetaJ, double axialForce, double initialShearDeformation);
+
     ID connectedExternalNodes;
     Node *theNodes[2];
     CrdTransf *theCoordTransf;
 
-    UniaxialMaterial *bendingYMaterials[2];
-    UniaxialMaterial *bendingZMaterials[2];
-    UniaxialMaterial *shearYMaterial;
-    UniaxialMaterial *shearZMaterial;
-    UniaxialMaterial *torsionMaterial;
+    UniaxialMaterial *bendingMaterials[2];
+    UniaxialMaterial *shearMaterial;
     UniaxialMaterial *axialMaterial;
+
+    // 轴力相关承载力计算参数；width 为零时不启用轴力相关骨架更新。
+    double width;
+    double thickness;
+    double compressiveStrength;
+    double cohesion;
+    double diagonalTensileStrength;
+    double contraflexureDistance;
+    double stressBlockCoefficient;
+    double frictionCoefficient;
+
+    // 内部剪切变形局部求解参数。
+    int maximumIterations;
+    double relativeTolerance;
 
     // 以下对象作为 OpenSees const 引用返回值的持久缓存。
     Matrix tangentStiffness;
