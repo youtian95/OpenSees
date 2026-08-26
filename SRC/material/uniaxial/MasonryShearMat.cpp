@@ -17,9 +17,12 @@
 #include <classTags.h>
 #include <Channel.h>
 #include <FEM_ObjectBroker.h>
+#include <Information.h>
+#include <MaterialResponse.h>
 #include <Vector.h>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 // 已创建的材料实例数(用于只在首次创建时打印署名横幅)
 static int numMasonryShearMat = 0;
@@ -300,6 +303,38 @@ MasonryShearMat::Print(OPS_Stream &s, int flag)
   s << "  history: revStrain=" << cState.revStrain << " revStress=" << cState.revStress << " targetStrain=" << cState.tgtStrain << " targetStress=" << cState.tgtStress << " umaxPos=" << cState.umaxPos << " umaxNeg=" << cState.umaxNeg << endln;
 }
 
+// 创建只读诊断响应，供单元 recorder 或 OpenSeesPy 查询当前骨架与滞回状态。
+Response *MasonryShearMat::setResponse(const char **argv, int argc, OPS_Stream &output)
+{
+  if (argc > 0 && std::strcmp(argv[0], "diagnostics") == 0) {
+    static const char *labels[] = {"Vmax", "committedVmax", "Vy", "uy", "branch", "strain", "stress", "tangent", "targetStrain", "targetStress", "reversalStrain", "reversalStress", "loadingDirection"};
+    for (const char *label : labels) output.tag("ResponseType", label);
+    return new MaterialResponse(this, 100, Vector(13));
+  }
+  return UniaxialMaterial::setResponse(argv, argc, output);
+}
+
+// 返回诊断向量，各分量顺序与 setResponse() 中的标签一致。
+int MasonryShearMat::getResponse(int responseID, Information &information)
+{
+  if (responseID != 100) return UniaxialMaterial::getResponse(responseID, information);
+  static Vector diagnostics(13);
+  diagnostics(0) = Vmax;
+  diagnostics(1) = committedVmax;
+  diagnostics(2) = Vy;
+  diagnostics(3) = uy;
+  diagnostics(4) = static_cast<int>(tState.branch);
+  diagnostics(5) = tState.strain;
+  diagnostics(6) = tState.stress;
+  diagnostics(7) = tState.tangent;
+  diagnostics(8) = tState.tgtStrain;
+  diagnostics(9) = tState.tgtStress;
+  diagnostics(10) = tState.revStrain;
+  diagnostics(11) = tState.revStress;
+  diagnostics(12) = tState.ldir;
+  return information.setVector(diagnostics);
+}
+
 // 根据当前试算最大剪切力更新所有依赖骨架峰值的派生参数。
 void MasonryShearMat::updateDerivedParameters()
 {
@@ -534,17 +569,17 @@ bool MasonryShearMat::checkTransitions() {
 
   // 从 RELOADING_FROM_UNLOADING_1 状态变化
   if (cState.branch == RELOADING_FROM_UNLOADING_1) {
-    if ((tState.strain - cState.tgtStrain) * tState.ldir > 0.0) {
+    if (tState.ldir * cState.stress < 0.0) {
+      // 局部加载方向反转时优先进入卸载，不能因跨过旧目标点而误回骨架。
+      tState.branch = UNLOADING_1;
+      return true;
+    } else if ((tState.strain - cState.tgtStrain) * tState.ldir > 0.0) {
       // 进入 HARDENING 状态
       if (std::abs(tState.strain) > umax) {
         tState.branch = HARDENING_2;
       } else {
         tState.branch = HARDENING_1;
       }
-      return true;
-    } else if ( tState.ldir * cState.stress < 0.0) {
-      // 进入 UNLOADING_1 状态
-      tState.branch = UNLOADING_1;
       return true;
     } else {
       // 还是处于 RELOADING_FROM_UNLOADING_1 状态

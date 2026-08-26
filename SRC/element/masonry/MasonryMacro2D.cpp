@@ -230,8 +230,9 @@ int MasonryMacro2D::commitState(void)
     const double momentI = bendingMaterials[0]->getStress();
     const double momentJ = bendingMaterials[1]->getStress();
     const double momentSum = momentI + momentJ;
-    const double V = std::abs(shearMaterial->getStress());
-    const double trialContraflexureDistance = V < 1.0e-10 ? theCoordTransf->getInitialLength() / 2.0 : std::max(std::abs(momentI), std::abs(momentJ)) / std::abs(V);
+    const double V = std::abs(momentSum / theCoordTransf->getInitialLength());
+    double trialContraflexureDistance = std::max(std::abs(momentI), std::abs(momentJ)) / std::abs(V);
+    trialContraflexureDistance = std::min(trialContraflexureDistance, 1.0e8);
     int result = this->Element::commitState();
     result += theCoordTransf->commitState();
     result += bendingMaterials[0]->commitState();
