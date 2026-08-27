@@ -31,10 +31,15 @@ class MasonryBendingMat : public UniaxialMaterial
     // ---- UniaxialMaterial 纯虚函数(必须实现) ----
     // 设置试应变(与应变率), 在其中由本构规律计算应力与切线刚度
     int setTrialStrain(double strain, double strainRate = 0.0);
+    // 以初始刚度计算线性试算状态，不推进弯曲材料的非线性历史。
+    // strain: 当前端部转角。
+    // strainRate: 当前端部转角速率。
+    int setTrialLinearStrain(double strain, double strainRate = 0.0);
     double getStrain(void);          // 返回当前试应变
     double getStress(void);          // 返回当前试应力
     double getTangent(void);         // 返回当前试切线刚度
     double getInitialTangent(void);  // 返回初始刚度(Ke)
+    double getYieldStrain(void) const; // 返回当前骨架的屈服转角。
 
     // 设置当前试算轴力对应的弯曲骨架峰值；Mmax: 当前试算最大弯矩
     int setTrialBackbone(double Mmax);

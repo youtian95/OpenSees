@@ -31,10 +31,15 @@ class MasonryShearMat : public UniaxialMaterial
     // ---- UniaxialMaterial 纯虚函数(必须实现) ----
     // 设置试应变(与应变率), 在其中由本构规律计算应力与切线刚度
     int setTrialStrain(double strain, double strainRate = 0.0);
+    // 以初始刚度计算线性试算状态，不推进剪切材料的非线性历史。
+    // strain: 当前剪切变形。
+    // strainRate: 当前剪切变形速率。
+    int setTrialLinearStrain(double strain, double strainRate = 0.0);
     double getStrain(void);          // 返回当前试应变
     double getStress(void);          // 返回当前试应力
     double getTangent(void);         // 返回当前试切线刚度
     double getInitialTangent(void);  // 返回初始刚度(Ke)
+    double getYieldStrain(void) const; // 返回当前骨架的屈服位移。
 
     // 设置当前试算轴力对应的剪切骨架峰值；Vmax: 当前试算最大剪切力
     int setTrialBackbone(double Vmax);
@@ -93,8 +98,8 @@ class MasonryShearMat : public UniaxialMaterial
         // 加载方向(这一步减去上一步的应变, 判断加载方向)
         double ldir = 1.0;     // 加载方向: 1.0 表示正向加载, -1.0 表示负向加载
         // 历史变量
-        double umaxPos = 0.0;   // 正向历史最大应变
-        double umaxNeg = 0.0;   // 负向历史最大应变
+        double umaxPos = 0.0;   // 历史最大绝对位移的正向值
+        double umaxNeg = 0.0;   // 历史最大绝对位移的负向值，与umaxPos对称
         double revStrain = 0.0, revStress = 0.0;      // 反转点: 卸载线的起点
         double tgtStrain = 0.0, tgtStress = 0.0;  // 反向加载的目标点
         double cycleStartStrain = 0.0;  // 当前耗能回路起点位移

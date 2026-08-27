@@ -135,10 +135,24 @@ int MasonryBendingMat::setTrialStrain(double strain, double strainRate)
   return 0;
 }
 
+int MasonryBendingMat::setTrialLinearStrain(double strain, double strainRate)
+{
+  // 非控制弹簧始终沿原点处的初始弹性直线响应，同时保留上一步已提交历史。
+  tState = cState;
+  tState.strain = strain;
+  tState.strainRate = strainRate;
+  tState.stress = Ke * strain;
+  tState.tangent = Ke;
+  tState.branch = ELASTIC;
+  return 0;
+}
+
 double MasonryBendingMat::getStrain(void) { return tState.strain; }
 double MasonryBendingMat::getStress(void) { return tState.stress; }
 double MasonryBendingMat::getTangent(void) { return tState.tangent; }
 double MasonryBendingMat::getInitialTangent(void) { return Ke; }
+
+double MasonryBendingMat::getYieldStrain(void) const { return uy; }
 
 // 设置当前试算轴力对应的弯曲骨架峰值。
 // Mmax: 当前试算最大弯矩；应在本次 setTrialStrain() 之前调用。

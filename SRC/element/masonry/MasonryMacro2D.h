@@ -43,7 +43,7 @@ public:
     // maximumIterations: 内部剪切变形局部 Newton 迭代的最大次数。
     // relativeTolerance: 内部局部迭代的相对收敛容差。
     // useDisplacementConvergence: 为 true 时使用剪切变形误差，为 false 时使用力平衡残差。
-    MasonryMacro2D(int tag, int nodeI, int nodeJ, UniaxialMaterial &bendingMaterial, UniaxialMaterial &shearMaterial, UniaxialMaterial &axialMaterial, CrdTransf &coordinateTransformation, double width = 0.0, double thickness = 0.0, double compressiveStrength = 0.0, double cohesion = 0.0, double diagonalTensileStrength = 0.0, double stressBlockCoefficient = 0.85, double frictionCoefficient = 0.4, int maximumIterations = 50, double relativeTolerance = 1.0e-8, bool useDisplacementConvergence = true);
+    MasonryMacro2D(int tag, int nodeI, int nodeJ, UniaxialMaterial &bendingMaterial, UniaxialMaterial &shearMaterial, UniaxialMaterial &axialMaterial, CrdTransf &coordinateTransformation, double width = 0.0, double thickness = 0.0, double compressiveStrength = 0.0, double cohesion = 0.0, double diagonalTensileStrength = 0.0, double stressBlockCoefficient = 0.85, double frictionCoefficient = 0.4, int maximumIterations = 50, double relativeTolerance = 1.0e-8, bool useDisplacementConvergence = true, bool useExclusiveFailureMode = false);
 
     // 创建供 ObjectBroker 接收数据使用的空对象。
     MasonryMacro2D();
@@ -119,6 +119,9 @@ private:
     // residualScale: 返回用于相对收敛判断的残差量级。
     int evaluateInternalShearResidual(double thetaI, double thetaJ, double axialForce, double shearDeformation, double &residual, double &residualScale);
 
+    // 根据未锁定状态下的收敛弹簧变形，选择首先越过屈服点的控制弹簧。
+    int selectTrialFailureMode(void);
+
     // 使用普通 Newton 法求解内部剪切变形。
     // thetaI: I 端相对于单元弦的基本试算转角，逆时针为正。
     // thetaJ: J 端相对于单元弦的基本试算转角，逆时针为正。
@@ -157,6 +160,11 @@ private:
     int maximumIterations;
     double relativeTolerance;
     bool useDisplacementConvergence;
+
+    // 互斥破坏模式：0 未锁定，1 剪切控制，2 弯曲控制；一经提交便不再切换。
+    bool useExclusiveFailureMode;
+    int committedFailureMode;
+    int trialFailureMode;
 
     // 以下对象作为 OpenSees const 引用返回值的持久缓存。
     Matrix tangentStiffness;
