@@ -7,7 +7,7 @@
 //       R_My: 屈服弯矩与Mmax的比值(论文取0.7)
 //       CF: 第一段卸载相对反转点弯矩的下降比例(论文取0.2)
 //       CD: 卸载第二折点相对屈服转角的水平位置参数(论文取0.1)
-//       gamma1: 第一段卸载刚度与Ke之比(论文取1.2)
+//       gamma1: 极限转角处第一段卸载刚度与Ke之比
 //       gamma2: 第二段卸载路径斜率系数(论文取1.2，对应NextFEM的cC作用)
 // 说明: 当前弯曲模型不包含剪切材料中的beta退化参数，不考虑强度或能量退化。
 //       实现见同目录 MasonryBendingMat.cpp
@@ -59,7 +59,7 @@ class MasonryBendingMat : public UniaxialMaterial
     double R_My;    // 屈服弯矩与Mmax的比值
     double CF;      // 第一段卸载段相对反转点的力下降比
     double CD;      // 第二折点相对屈服转角的水平位置参数
-    double gamma1;  // 第一段卸载段刚度与Ke之比
+    double gamma1;  // 极限转角处第一段卸载刚度与Ke之比
     double gamma2;  // 第二段卸载路径斜率系数
 
     // ---- 分支状态机 ----
@@ -83,6 +83,7 @@ class MasonryBendingMat : public UniaxialMaterial
       double ldir = 1.0;                  // 当前加载方向
       double revStrain = 0.0;             // 反转点A的转角
       double revStress = 0.0;             // 反转点A的弯矩
+      double maxAbsStrain = 0.0;          // 已达到的历史最大绝对转角
       bool directUnloading3 = false;      // 是否从再加载直接进入第三段
     };
 
@@ -97,6 +98,9 @@ class MasonryBendingMat : public UniaxialMaterial
     // ---- 辅助函数 ----
     // 根据当前试算最大弯矩重算屈服弯矩、屈服转角和屈服后刚度
     void updateDerivedParameters();
+    // 根据历史最大绝对转角计算第一段卸载刚度，超过极限转角后继续线性退化。
+    // state: 保存历史最大绝对转角的材料状态。
+    double unloadingStiffness(const State &state) const;
     void backbone(double rotation, double &moment, double &tangent);
     State initialState() const;
     // 根据反转点弯矩方向计算第三段卸载的反向屈服转角。

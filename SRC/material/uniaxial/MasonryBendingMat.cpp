@@ -108,6 +108,7 @@ int MasonryBendingMat::setTrialStrain(double strain, double strainRate)
   tState = cState;
   tState.strain = strain;
   tState.strainRate = strainRate;
+  tState.maxAbsStrain = std::max(cState.maxAbsStrain, std::abs(strain));
 
   // 根据当前试转角相对已提交转角的增量确定加载方向。
   const double du = tState.strain - cState.strain;
@@ -187,8 +188,8 @@ UniaxialMaterial *MasonryBendingMat::getCopy(void)
 // 发送材料参数和完整已提交状态。
 int MasonryBendingMat::sendSelf(int commitTag, Channel &theChannel)
 {
-  // data(0)为材料tag，data(1..8)为参数，data(9)为已提交骨架峰值，data(10..18)为状态。
-  static Vector data(19);
+  // data(0)为材料tag，data(1..8)为参数，data(9)为已提交骨架峰值，data(10..19)为状态。
+  static Vector data(20);
   data(0) = getTag();
   data(1) = Ke; data(2) = initialMmax; data(3) = uu; data(4) = R_My;
   data(5) = CF; data(6) = CD; data(7) = gamma1; data(8) = gamma2;
@@ -202,6 +203,7 @@ int MasonryBendingMat::sendSelf(int commitTag, Channel &theChannel)
   data(16) = cState.revStrain;
   data(17) = cState.revStress;
   data(18) = cState.directUnloading3 ? 1.0 : 0.0;
+  data(19) = cState.maxAbsStrain;
 
   int result = theChannel.sendVector(getDbTag(), commitTag, data);
   if (result < 0)
@@ -213,7 +215,7 @@ int MasonryBendingMat::sendSelf(int commitTag, Channel &theChannel)
 int MasonryBendingMat::recvSelf(
     int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker)
 {
-  static Vector data(19);
+  static Vector data(20);
   int result = theChannel.recvVector(getDbTag(), commitTag, data);
   if (result < 0) {
     opserr << "MasonryBendingMat::recvSelf() - failed to receive data\n";
@@ -236,6 +238,7 @@ int MasonryBendingMat::recvSelf(
   cState.revStrain = data(16);
   cState.revStress = data(17);
   cState.directUnloading3 = data(18) != 0.0;
+  cState.maxAbsStrain = data(19);
   tState = cState;
   return 0;
 }
@@ -250,7 +253,7 @@ void MasonryBendingMat::Print(OPS_Stream &s, int flag)
     << " CD: " << CD << " gamma1: " << gamma1
     << " gamma2: " << gamma2 << endln;
   s << "  trial: strain=" << tState.strain << " stress=" << tState.stress << " tangent=" << tState.tangent << " branch=" << static_cast<int>(tState.branch) << " direction=" << tState.ldir << endln;
-  s << "  committed: strain=" << cState.strain << " stress=" << cState.stress << " tangent=" << cState.tangent << " branch=" << static_cast<int>(cState.branch) << " direction=" << cState.ldir << endln;
+  s << "  committed: strain=" << cState.strain << " stress=" << cState.stress << " tangent=" << cState.tangent << " branch=" << static_cast<int>(cState.branch) << " direction=" << cState.ldir << " maxAbsStrain=" << cState.maxAbsStrain << endln;
 }
 
 // 根据当前试算最大弯矩更新所有依赖骨架峰值的派生参数。
@@ -259,6 +262,17 @@ void MasonryBendingMat::updateDerivedParameters()
   My = R_My * Mmax;
   uy = Ke != 0.0 ? My / Ke : 0.0;
   Kp = uu > uy ? (Mmax - My) / (uu - uy) : 0.0;
+}
+
+// 根据历史最大绝对转角计算第一段卸载刚度。
+// 屈服前保持Ke，屈服后线性退化，并在超过uu后继续沿同一斜率外推。
+double MasonryBendingMat::unloadingStiffness(const State &state) const
+{
+  if (state.maxAbsStrain <= uy)
+    return Ke;
+
+  const double ratio = (state.maxAbsStrain - uy) / (uu - uy);
+  return Ke * (1.0 + (gamma1 - 1.0) * ratio);
 }
 
 // 计算无退化的双折线弯矩-转角骨架。
@@ -292,7 +306,7 @@ void MasonryBendingMat::computeUnloadingPoints(const State &state, double &unloa
     return;
   }
 
-  const double k1 = gamma1 * Ke;
+  const double k1 = unloadingStiffness(state);
   const double k2 = gamma2 * Kp;
   const double safeK1 = std::abs(k1) > 1.0e-14 ? k1 : Ke;
   const double safeK2 = std::abs(k2) > 1.0e-14 ? k2 : Kp;
@@ -329,7 +343,7 @@ double MasonryBendingMat::unloadingTargetStrain(const State &state) const
 // state: 当前试状态，rotation: 当前试转角
 void MasonryBendingMat::evaluateUnloadingPath(State &state, double rotation)
 {
-  const double k1 = gamma1 * Ke;
+  const double k1 = unloadingStiffness(state);
   const double k2 = gamma2 * Kp;
   const double safeK1 = std::abs(k1) > 1.0e-14 ? k1 : Ke;
   const double safeK2 = std::abs(k2) > 1.0e-14 ? k2 : Kp;
@@ -448,7 +462,7 @@ bool MasonryBendingMat::checkTransitions()
       return true;
     }
     // 再加载沿K1直线上升，在当前加载方向与骨架相交时回到骨架。
-    const double K1 = gamma1 * Ke;
+    const double K1 = unloadingStiffness(cState);
     const double assumedStress = cState.stress + K1 * du;
     double backboneStress = 0.0;
     double backboneTangent = 0.0;
@@ -479,7 +493,7 @@ void MasonryBendingMat::ruleFromHardening1()
     tState.revStrain = cState.strain;
     tState.revStress = cState.stress;
     tState.directUnloading3 = false;
-    tState.tangent = gamma1 * Ke;
+    tState.tangent = unloadingStiffness(tState);
     tState.stress = cState.stress + tState.tangent * (tState.strain - cState.strain);
   }
 }
@@ -494,7 +508,7 @@ void MasonryBendingMat::ruleFromUnloading1()
              tState.branch == UNLOADING_3) {
     evaluateUnloadingPath(tState, tState.strain);
   } else if (tState.branch == RELOADING_FROM_UNLOADING) {
-    tState.tangent = gamma1 * Ke;
+    tState.tangent = unloadingStiffness(tState);
     tState.stress = cState.stress + tState.tangent * (tState.strain - cState.strain);
   }
 }
@@ -505,7 +519,7 @@ void MasonryBendingMat::ruleFromUnloading2()
   if (tState.branch == UNLOADING_2 || tState.branch == UNLOADING_3) {
     evaluateUnloadingPath(tState, tState.strain);
   } else if (tState.branch == RELOADING_FROM_UNLOADING) {
-    tState.tangent = gamma1 * Ke;
+    tState.tangent = unloadingStiffness(tState);
     tState.stress = cState.stress + tState.tangent * (tState.strain - cState.strain);
   }
 }
@@ -516,7 +530,7 @@ void MasonryBendingMat::ruleFromUnloading3()
   if (tState.branch == UNLOADING_3) {
     evaluateUnloadingPath(tState, tState.strain);
   } else if (tState.branch == RELOADING_FROM_UNLOADING) {
-    tState.tangent = gamma1 * Ke;
+    tState.tangent = unloadingStiffness(tState);
     tState.stress = cState.stress + tState.tangent * (tState.strain - cState.strain);
   } else if (tState.branch == HARDENING_1) {
     backbone(tState.strain, tState.stress, tState.tangent);
@@ -527,7 +541,7 @@ void MasonryBendingMat::ruleFromUnloading3()
 void MasonryBendingMat::ruleFromReloading()
 {
   if (tState.branch == RELOADING_FROM_UNLOADING) {
-    tState.tangent = gamma1 * Ke;
+    tState.tangent = unloadingStiffness(tState);
     tState.stress = cState.stress + tState.tangent * (tState.strain - cState.strain);
   } else if (tState.branch == HARDENING_1) {
     backbone(tState.strain, tState.stress, tState.tangent);
@@ -535,7 +549,7 @@ void MasonryBendingMat::ruleFromReloading()
     tState.revStrain = cState.strain;
     tState.revStress = cState.stress;
     tState.directUnloading3 = false;
-    tState.tangent = gamma1 * Ke;
+    tState.tangent = unloadingStiffness(tState);
     tState.stress = cState.stress + tState.tangent * (tState.strain - cState.strain);
   } else if (tState.branch == UNLOADING_3) {
     // 再加载在零力之前反向：以当前点作为第三段起点，直接连接反向屈服点。
