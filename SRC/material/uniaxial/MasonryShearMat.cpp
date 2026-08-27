@@ -4,9 +4,9 @@
 // 说明: 样板代码(工厂函数/状态管理/并行通讯)已完成,
 //       核心本构规律在 setTrialStrain 中以 TODO 标出, 由开发者手动实现
 // 用法: 编译后在脚本中使用:
-//       Tcl:        uniaxialMaterial MasonryShearMat matTag? Ke? Vmax? uu? <可选参数>
+//       Tcl:        uniaxialMaterial MasonryShearMat matTag? Ke? Vmax? uu? <可选参数> <-SymmetricMaxHistory>
 //       OpenSeesPy: ops.uniaxialMaterial('MasonryShearMat', matTag, Ke, Vmax, uu, ...)
-// 输入: matTag(整数); Ke Vmax uu(必选实数); R_Vy~beta(可选, 尾部省略用默认值)
+// 输入: matTag(整数); Ke Vmax uu(必选实数); R_Vy~beta(可选, 尾部省略用默认值); -SymmetricMaxHistory(可选)
 // 输出: 创建 MasonryShearMat 材料对象并注册到模型构建器
 // ============================================================================
 
@@ -29,7 +29,7 @@ static int numMasonryShearMat = 0;
 
 // 工厂函数: uniaxialMaterial 命令的入口
 // 命令语法(< > 内为可选参数, 尾部省略时使用构造函数的默认参数):
-//   uniaxialMaterial MasonryShearMat matTag? Ke? Vmax? uu? <R_Vy?> <R_Vu?> <R_umax?> <alpha?> <gamma?> <beta?>
+//   uniaxialMaterial MasonryShearMat matTag? Ke? Vmax? uu? <R_Vy?> <R_Vu?> <R_umax?> <alpha?> <gamma?> <beta?> <-SymmetricMaxHistory>
 void *OPS_MasonryShearMat(void)
 {
   // 首次创建时打印一次署名信息
@@ -40,7 +40,7 @@ void *OPS_MasonryShearMat(void)
 
   // 至少需要 matTag + Ke + Vmax + uu 四个参数
   if (OPS_GetNumRemainingInputArgs() < 4) {
-    opserr << "WARNING invalid args, want: uniaxialMaterial MasonryShearMat tag? Ke? Vmax? uu? <R_Vy?> <R_Vu?> <R_umax?> <alpha?> <gamma?> <beta?>\n";
+    opserr << "WARNING invalid args, want: uniaxialMaterial MasonryShearMat tag? Ke? Vmax? uu? <R_Vy?> <R_Vu?> <R_umax?> <alpha?> <gamma?> <beta?> <-SymmetricMaxHistory>\n";
     return 0;
   }
 
@@ -52,27 +52,37 @@ void *OPS_MasonryShearMat(void)
     return 0;
   }
 
-  // 2) 读取实数参数: 只读用户实际给出的个数(封顶9个),
-  //    再按实际个数调用构造函数, 尾部未给出的参数由头文件中的默认参数补齐
-  double dData[9];
-  int numArgs = OPS_GetNumRemainingInputArgs();
-  numData = (numArgs > 9) ? 9 : numArgs;
-  if (OPS_GetDoubleInput(&numData, dData) != 0) {
-    opserr << "WARNING invalid MasonryShearMat parameters\n";
+  // 2) 依次读取位置数值参数和对称历史开关，未给出的尾部参数使用默认值。
+  // OPS_GetStringFromAll 同时支持 Tcl 字符串和 OpenSeesPy 数值对象。
+  double dData[9] = {0.0, 0.0, 0.0, 0.7, 0.8, 0.5, 0.8, 0.6, 0.06};
+  int numberOfDoubleData = 0;
+  bool symmetricMaxHistory = false;
+  while (OPS_GetNumRemainingInputArgs() > 0) {
+    char argumentBuffer[128];
+    const char *argument = OPS_GetStringFromAll(argumentBuffer, 128);
+    if (std::strcmp(argument, "-SymmetricMaxHistory") == 0) {
+      symmetricMaxHistory = true;
+      continue;
+    }
+    if (numberOfDoubleData >= 9) {
+      opserr << "WARNING too many MasonryShearMat numeric parameters\n";
+      return 0;
+    }
+    char *end = 0;
+    dData[numberOfDoubleData] = std::strtod(argument, &end);
+    if (end == argument || *end != '\0') {
+      opserr << "WARNING invalid MasonryShearMat parameter: " << argument << endln;
+      return 0;
+    }
+    ++numberOfDoubleData;
+  }
+  if (numberOfDoubleData < 3) {
+    opserr << "WARNING MasonryShearMat requires Ke, Vmax and uu\n";
     return 0;
   }
 
-  // 3) 按实际读到的参数个数创建材料, 缺省参数自动生效
-  UniaxialMaterial *theMaterial = 0;
-  switch (numData) {
-    case 3:  theMaterial = new MasonryShearMat(iData[0], dData[0], dData[1], dData[2]); break;
-    case 4:  theMaterial = new MasonryShearMat(iData[0], dData[0], dData[1], dData[2], dData[3]); break;
-    case 5:  theMaterial = new MasonryShearMat(iData[0], dData[0], dData[1], dData[2], dData[3], dData[4]); break;
-    case 6:  theMaterial = new MasonryShearMat(iData[0], dData[0], dData[1], dData[2], dData[3], dData[4], dData[5]); break;
-    case 7:  theMaterial = new MasonryShearMat(iData[0], dData[0], dData[1], dData[2], dData[3], dData[4], dData[5], dData[6]); break;
-    case 8:  theMaterial = new MasonryShearMat(iData[0], dData[0], dData[1], dData[2], dData[3], dData[4], dData[5], dData[6], dData[7]); break;
-    default: theMaterial = new MasonryShearMat(iData[0], dData[0], dData[1], dData[2], dData[3], dData[4], dData[5], dData[6], dData[7], dData[8]); break;
-  }
+  // 3) 用完整参数和历史选项创建材料。
+  UniaxialMaterial *theMaterial = new MasonryShearMat(iData[0], dData[0], dData[1], dData[2], dData[3], dData[4], dData[5], dData[6], dData[7], dData[8], symmetricMaxHistory);
 
   if (theMaterial == 0) {
     opserr << "WARNING could not create uniaxialMaterial of type MasonryShearMat\n";
@@ -84,11 +94,11 @@ void *OPS_MasonryShearMat(void)
 // 全参构造函数
 // tag: 材料标签; 其余参数含义见头文件
 // 基类必须用 (tag, MAT_TAG_MasonryShearMat) 初始化
-MasonryShearMat::MasonryShearMat(int tag, double _Ke, double _Vmax, double _uu, double _R_Vy, double _R_Vu, double _R_umax, double _alpha, double _gamma, double _beta)
+MasonryShearMat::MasonryShearMat(int tag, double _Ke, double _Vmax, double _uu, double _R_Vy, double _R_Vu, double _R_umax, double _alpha, double _gamma, double _beta, bool _symmetricMaxHistory)
   : UniaxialMaterial(tag, MAT_TAG_MasonryShearMat),
     Ke(_Ke), initialVmax(_Vmax), Vmax(_Vmax), committedVmax(_Vmax), uu(_uu),
     R_Vy(_R_Vy), R_Vu(_R_Vu), R_umax(_R_umax),
-    alpha(_alpha), gamma(_gamma), beta(_beta)
+    alpha(_alpha), gamma(_gamma), beta(_beta), symmetricMaxHistory(_symmetricMaxHistory)
 {
   // 根据初始骨架峰值计算屈服力、残余力和特征位移。
   updateDerivedParameters();
@@ -102,7 +112,7 @@ MasonryShearMat::MasonryShearMat()
   : UniaxialMaterial(0, MAT_TAG_MasonryShearMat),
     Ke(0.0), initialVmax(0.0), Vmax(0.0), committedVmax(0.0), uu(0.0),
     R_Vy(0.7), R_Vu(0.8), R_umax(0.5),
-    alpha(0.8), gamma(0.6), beta(0.06),
+    alpha(0.8), gamma(0.6), beta(0.06), symmetricMaxHistory(false),
     Vy(0.0), Vu(0.0), umax(0.0), uy(0.0)
 {
   // 派生参数清零(recvSelf 恢复参数后会重算)
@@ -126,9 +136,14 @@ MasonryShearMat::setTrialStrain(double strain, double strainRate)
   tState = cState;
   tState.strain = strain;
   tState.strainRate = strainRate;
-  const double maximumAbsoluteStrain = std::max(cState.umaxPos, std::abs(strain));
-  tState.umaxPos = maximumAbsoluteStrain;
-  tState.umaxNeg = -maximumAbsoluteStrain;
+  if (symmetricMaxHistory) {
+    const double maximumAbsoluteStrain = std::max(std::max(cState.umaxPos, -cState.umaxNeg), std::abs(strain));
+    tState.umaxPos = maximumAbsoluteStrain;
+    tState.umaxNeg = -maximumAbsoluteStrain;
+  } else {
+    tState.umaxPos = std::max(cState.umaxPos, strain);
+    tState.umaxNeg = std::min(cState.umaxNeg, strain);
+  }
 
   // 计算加载方向
   double du = tState.strain - cState.strain;
@@ -233,8 +248,8 @@ MasonryShearMat::getCopy(void)
 int
 MasonryShearMat::sendSelf(int commitTag, Channel &theChannel)
 {
-  // 打包布局: data(0)=材料tag; data(1..9)=材料参数; data(10)=已提交骨架峰值; data(11..26)=已提交状态全字段
-  static Vector data(27);
+  // 打包布局: data(0)=材料tag; data(1..9)=材料参数; data(10)=已提交骨架峰值; data(11..26)=已提交状态; data(27)=对称历史开关
+  static Vector data(28);
   data(0) = this->getTag();
   // 材料参数
   data(1) = Ke;     data(2) = initialVmax;   data(3) = uu;
@@ -258,6 +273,7 @@ MasonryShearMat::sendSelf(int commitTag, Channel &theChannel)
   data(24) = cState.cycleStartStress;
   data(25) = cState.cycleStartDir;
   data(26) = cState.cycleWork;
+  data(27) = symmetricMaxHistory ? 1.0 : 0.0;
 
   int res = theChannel.sendVector(this->getDbTag(), commitTag, data);
   if (res < 0)
@@ -269,7 +285,7 @@ MasonryShearMat::sendSelf(int commitTag, Channel &theChannel)
 int
 MasonryShearMat::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker)
 {
-  static Vector data(27);
+  static Vector data(28);
   int res = theChannel.recvVector(this->getDbTag(), commitTag, data);
   if (res < 0) {
     opserr << "MasonryShearMat::recvSelf() - failed to receive data\n";
@@ -301,6 +317,7 @@ MasonryShearMat::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &
   cState.cycleStartStress = data(24);
   cState.cycleStartDir = data(25);
   cState.cycleWork = data(26);
+  symmetricMaxHistory = data(27) != 0.0;
   // 用已提交状态初始化试状态
   tState = cState;
   return 0;
@@ -314,7 +331,7 @@ MasonryShearMat::Print(OPS_Stream &s, int flag)
   s << "MasonryShearMat tag: " << this->getTag() << endln;
   s << "  Ke: " << Ke << " initialVmax: " << initialVmax << " committedVmax: " << committedVmax << " Vmax: " << Vmax << " uu: " << uu << endln;
   s << "  R_Vy: " << R_Vy << " R_Vu: " << R_Vu << " R_umax: " << R_umax
-    << " alpha: " << alpha << " gamma: " << gamma << " beta: " << beta << endln;
+    << " alpha: " << alpha << " gamma: " << gamma << " beta: " << beta << " symmetricMaxHistory: " << symmetricMaxHistory << endln;
   s << "  trial: strain=" << tState.strain << " stress=" << tState.stress << " tangent=" << tState.tangent << " branch=" << static_cast<int>(tState.branch) << " direction=" << tState.ldir << endln;
   s << "  committed: strain=" << cState.strain << " stress=" << cState.stress << " tangent=" << cState.tangent << " branch=" << static_cast<int>(cState.branch) << " direction=" << cState.ldir << endln;
   s << "  history: revStrain=" << cState.revStrain << " revStress=" << cState.revStress << " targetStrain=" << cState.tgtStrain << " targetStress=" << cState.tgtStress << " umaxPos=" << cState.umaxPos << " umaxNeg=" << cState.umaxNeg << endln;
@@ -406,19 +423,21 @@ void MasonryShearMat::intersectionWithBackbone(double Strain, double Stress, dou
   double uHigh = 0.0;
 
   if (dir > 0.0) {
-    if (cState.umaxPos <= eps) {
+    const double positiveHistory = cState.umaxPos > eps ? cState.umaxPos : -cState.umaxNeg;
+    if (positiveHistory <= eps) {
       tgtStrain = Strain;
       tgtStress = Stress;
       return;
     }
-    uHigh = std::max(cState.umaxPos, Strain + 1.0e-8);
+    uHigh = std::max(positiveHistory, Strain + 1.0e-8);
   } else {
-    if (std::abs(cState.umaxNeg) <= eps) {
+    const double negativeHistory = cState.umaxNeg < -eps ? cState.umaxNeg : -cState.umaxPos;
+    if (std::abs(negativeHistory) <= eps) {
       tgtStrain = Strain;
       tgtStress = Stress;
       return;
     }
-    uHigh = std::min(cState.umaxNeg, Strain - 1.0e-8);
+    uHigh = std::min(negativeHistory, Strain - 1.0e-8);
   }
 
   // 先检查当前点本身是否已在骨架曲线上。
@@ -729,12 +748,13 @@ void MasonryShearMat::ruleFromReloadingFromUnloading1() {
 }
 
 double MasonryShearMat::computeUnload1Tangent(const State &state) {
-  // 根据加载历史中的最大绝对位移计算卸载刚度，正负方向采用同一退化水平。
-  if (state.umaxPos <= uy)
+  // 根据当前反转一侧的历史最大位移计算卸载刚度。
+  const double maximumStrain = state.strain >= 0.0 ? state.umaxPos : -state.umaxNeg;
+  if (maximumStrain <= uy)
     return Ke;
 
   const double Ck = (alpha - 1.0) / (uu / uy - 1.0);
-  return Ke * (1.0 + Ck * (state.umaxPos / uy - 1.0));
+  return Ke * (1.0 + Ck * (maximumStrain / uy - 1.0));
 }
 
 double MasonryShearMat::backboneWork(double strain) const {
@@ -760,8 +780,12 @@ double MasonryShearMat::backboneWork(double strain) const {
 }
 
 void MasonryShearMat::setUnloading2Target(State &state, const State &origin) {
-  // 先取得不考虑强度退化时的历史最大位移目标。
-  const double originalTargetStrain = state.ldir > 0.0 ? origin.umaxPos : origin.umaxNeg;
+  // 优先使用目标方向自己的历史峰值；该方向尚未加载时，仅对重加载目标点镜像另一方向历史。
+  double originalTargetStrain = state.ldir > 0.0 ? origin.umaxPos : origin.umaxNeg;
+  if (state.ldir > 0.0 && originalTargetStrain <= 0.0)
+    originalTargetStrain = -origin.umaxNeg;
+  else if (state.ldir < 0.0 && originalTargetStrain >= 0.0)
+    originalTargetStrain = -origin.umaxPos;
   double originalTargetStress = 0.0;
   double originalTargetTangent = 0.0;
   backbone(originalTargetStrain, originalTargetStress, originalTargetTangent);

@@ -2,7 +2,7 @@
 // 文件: MasonryShearMat.h
 // 功能: MasonryShearMat 砌体剪切单轴材料类声明
 // 用法: 脚本命令
-//       uniaxialMaterial MasonryShearMat matTag? Ke? Vmax? uu? <R_Vy?> <R_Vu?> <R_umax?> <alpha?> <gamma?> <beta?>
+//       uniaxialMaterial MasonryShearMat matTag? Ke? Vmax? uu? <R_Vy?> <R_Vu?> <R_umax?> <alpha?> <gamma?> <beta?> <-SymmetricMaxHistory>
 //       Ke: 弹性刚度; Vmax: 最大剪切力; uu: 极限剪切位移(论文取0.004h)
 //       R_Vy: 屈服力与Vmax的比值(默认0.7)
 //       R_Vu: 极限位移对应剪力与Vmax比值(默认0.8)
@@ -10,6 +10,7 @@
 //       alpha: 卸载刚度除以弹性刚度(论文取0.8)
 //       gamma: 卸载转折点的力与卸载点的力之比(默认取0.6, 论文中未出现该数值)
 //       beta: 强度退化系数(论文取0.06), d_u2 = beta * d_E_h / Vmax
+//       -SymmetricMaxHistory: 使正、负向历史最大变形保持对称，默认不对称
 //       实现见同目录 MasonryShearMat.cpp
 // ============================================================================
 
@@ -23,8 +24,8 @@ class MasonryShearMat : public UniaxialMaterial
 {
   public:
     // 构造函数
-    // tag: 材料标签; Ke Vmax uu 必选; R_Vy~beta 可选(默认值见参数声明)
-    MasonryShearMat(int tag, double Ke, double Vmax, double uu, double R_Vy = 0.7, double R_Vu = 0.8, double R_umax = 0.5, double alpha = 0.8, double gamma = 0.6, double beta = 0.06);
+    // tag: 材料标签; Ke Vmax uu 必选; R_Vy~beta 可选; symmetricMaxHistory 控制正负历史是否对称
+    MasonryShearMat(int tag, double Ke, double Vmax, double uu, double R_Vy = 0.7, double R_Vu = 0.8, double R_umax = 0.5, double alpha = 0.8, double gamma = 0.6, double beta = 0.06, bool symmetricMaxHistory = false);
     MasonryShearMat();   // 默认构造(FEM_ObjectBroker 并行/数据库恢复时需要)
     ~MasonryShearMat();  // 析构函数
 
@@ -69,6 +70,7 @@ class MasonryShearMat : public UniaxialMaterial
     double alpha;   // 极限位移点卸载刚度与弹性刚度之比
     double gamma;   // 卸载转折点力与卸载点力之比
     double beta;    // 强度退化系数
+    bool symmetricMaxHistory;  // true 时正负历史最大变形保持对称，false 时分别记录
 
     // ---- 推算的材料参数(可在构造函数中计算) ----
     double Vy;      // 屈服力
@@ -98,8 +100,8 @@ class MasonryShearMat : public UniaxialMaterial
         // 加载方向(这一步减去上一步的应变, 判断加载方向)
         double ldir = 1.0;     // 加载方向: 1.0 表示正向加载, -1.0 表示负向加载
         // 历史变量
-        double umaxPos = 0.0;   // 历史最大绝对位移的正向值
-        double umaxNeg = 0.0;   // 历史最大绝对位移的负向值，与umaxPos对称
+        double umaxPos = 0.0;   // 正向历史最大位移
+        double umaxNeg = 0.0;   // 负向历史最小位移
         double revStrain = 0.0, revStress = 0.0;      // 反转点: 卸载线的起点
         double tgtStrain = 0.0, tgtStress = 0.0;  // 反向加载的目标点
         double cycleStartStrain = 0.0;  // 当前耗能回路起点位移
