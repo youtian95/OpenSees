@@ -328,6 +328,24 @@ MasonryShearMat::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &
 void
 MasonryShearMat::Print(OPS_Stream &s, int flag)
 {
+  if (flag == OPS_PRINT_PRINTMODEL_JSON) {
+    // 按 OpenSees print -JSON 约定输出单个材料对象，布尔选项使用 JSON 布尔值。
+    s << "\t\t\t{";
+    s << "\"name\": \"" << this->getTag() << "\", ";
+    s << "\"type\": \"MasonryShearMat\", ";
+    s << "\"Ke\": " << Ke << ", ";
+    s << "\"Vmax\": " << initialVmax << ", ";
+    s << "\"uu\": " << uu << ", ";
+    s << "\"R_Vy\": " << R_Vy << ", ";
+    s << "\"R_Vu\": " << R_Vu << ", ";
+    s << "\"R_umax\": " << R_umax << ", ";
+    s << "\"alpha\": " << alpha << ", ";
+    s << "\"gamma\": " << gamma << ", ";
+    s << "\"beta\": " << beta << ", ";
+    s << "\"symmetricMaxHistory\": " << (symmetricMaxHistory ? "true" : "false") << "}";
+    return;
+  }
+
   s << "MasonryShearMat tag: " << this->getTag() << endln;
   s << "  Ke: " << Ke << " initialVmax: " << initialVmax << " committedVmax: " << committedVmax << " Vmax: " << Vmax << " uu: " << uu << endln;
   s << "  R_Vy: " << R_Vy << " R_Vu: " << R_Vu << " R_umax: " << R_umax

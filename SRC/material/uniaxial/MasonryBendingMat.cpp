@@ -260,6 +260,22 @@ int MasonryBendingMat::recvSelf(
 // 打印材料信息。
 void MasonryBendingMat::Print(OPS_Stream &s, int flag)
 {
+  if (flag == OPS_PRINT_PRINTMODEL_JSON) {
+    // 按 OpenSees print -JSON 约定输出单个材料对象，不附加换行或尾随逗号。
+    s << "\t\t\t{";
+    s << "\"name\": \"" << getTag() << "\", ";
+    s << "\"type\": \"MasonryBendingMat\", ";
+    s << "\"Ke\": " << Ke << ", ";
+    s << "\"Mmax\": " << initialMmax << ", ";
+    s << "\"uu\": " << uu << ", ";
+    s << "\"R_My\": " << R_My << ", ";
+    s << "\"CF\": " << CF << ", ";
+    s << "\"CD\": " << CD << ", ";
+    s << "\"gamma1\": " << gamma1 << ", ";
+    s << "\"gamma2\": " << gamma2 << "}";
+    return;
+  }
+
   s << "MasonryBendingMat tag: " << getTag() << endln;
   s << "  Ke: " << Ke << " initialMmax: " << initialMmax << " committedMmax: " << committedMmax << " Mmax: " << Mmax << " uu: " << uu << endln;
   s << "  My: " << My << " uy: " << uy << " Kp: " << Kp << endln;

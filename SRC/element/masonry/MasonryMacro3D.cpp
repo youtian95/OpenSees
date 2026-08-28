@@ -828,6 +828,30 @@ int MasonryMacro3D::displaySelf(Renderer &theViewer, int displayMode, float fact
 
 void MasonryMacro3D::Print(OPS_Stream &s, int flag)
 {
+    if (flag == OPS_PRINT_PRINTMODEL_JSON) {
+        // 输出模型定义所需的标签、几何参数和局部迭代选项。
+        s << "\t\t\t{";
+        s << "\"name\": " << this->getTag() << ", ";
+        s << "\"type\": \"MasonryMacro3D\", ";
+        s << "\"nodes\": [" << connectedExternalNodes(0) << ", " << connectedExternalNodes(1) << "], ";
+        s << "\"bendingMaterial\": \"" << bendingMaterials[0]->getTag() << "\", ";
+        s << "\"shearMaterial\": \"" << shearMaterial->getTag() << "\", ";
+        s << "\"axialMaterial\": \"" << axialMaterial->getTag() << "\", ";
+        s << "\"crdTransformation\": \"" << theCoordTransf->getTag() << "\", ";
+        s << "\"axialForceInteraction\": " << (width != 0.0 ? "true" : "false") << ", ";
+        s << "\"width\": " << width << ", ";
+        s << "\"thickness\": " << thickness << ", ";
+        s << "\"compressiveStrength\": " << compressiveStrength << ", ";
+        s << "\"cohesion\": " << cohesion << ", ";
+        s << "\"diagonalTensileStrength\": " << diagonalTensileStrength << ", ";
+        s << "\"stressBlockCoefficient\": " << stressBlockCoefficient << ", ";
+        s << "\"frictionCoefficient\": " << frictionCoefficient << ", ";
+        s << "\"maximumIterations\": " << maximumIterations << ", ";
+        s << "\"relativeTolerance\": " << relativeTolerance << ", ";
+        s << "\"localIterationConvergence\": \"" << (useDisplacementConvergence ? "displacement" : "force") << "\"}";
+        return;
+    }
+
     s << "MasonryMacro3D, element: " << this->getTag() << ", nodes: " << connectedExternalNodes << endln;
     if (width != 0.0) {
         s << "  axial interaction: width=" << width << " thickness=" << thickness << " fm=" << compressiveStrength << " cohesion=" << cohesion << " ft=" << diagonalTensileStrength << " committedH0=" << committedContraflexureDistance << endln;
