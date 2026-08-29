@@ -44,7 +44,9 @@ public:
     // relativeTolerance: 内部局部迭代的相对收敛容差。
     // useDisplacementConvergence: 为 true 时使用剪切变形误差，为 false 时使用力平衡残差。
     // useExclusiveFailureMode: 为 true 时只允许剪切或弯曲中的一种破坏模式进入非线性。
-    MasonryMacro3D(int tag, int nodeI, int nodeJ, UniaxialMaterial &bendingMaterial, UniaxialMaterial &shearMaterial, UniaxialMaterial &axialMaterial, CrdTransf &coordinateTransformation, double width = 0.0, double thickness = 0.0, double compressiveStrength = 0.0, double cohesion = 0.0, double diagonalTensileStrength = 0.0, double stressBlockCoefficient = 0.85, double frictionCoefficient = 0.4, int maximumIterations = 50, double relativeTolerance = 1.0e-8, bool useDisplacementConvergence = true, bool useExclusiveFailureMode = false);
+    // printModelWidth: 仅用于 Print JSON 的构件宽度；负值表示沿用轴力相互作用宽度。
+    // printModelThickness: 仅用于 Print JSON 的构件厚度；负值表示沿用轴力相互作用厚度。
+    MasonryMacro3D(int tag, int nodeI, int nodeJ, UniaxialMaterial &bendingMaterial, UniaxialMaterial &shearMaterial, UniaxialMaterial &axialMaterial, CrdTransf &coordinateTransformation, double width = 0.0, double thickness = 0.0, double compressiveStrength = 0.0, double cohesion = 0.0, double diagonalTensileStrength = 0.0, double stressBlockCoefficient = 0.85, double frictionCoefficient = 0.4, int maximumIterations = 50, double relativeTolerance = 1.0e-8, bool useDisplacementConvergence = true, bool useExclusiveFailureMode = false, double printModelWidth = -1.0, double printModelThickness = -1.0);
 
     // 创建供 ObjectBroker 接收数据使用的空对象。
     MasonryMacro3D();
@@ -161,6 +163,10 @@ private:
     double diagonalTensileStrength;
     double stressBlockCoefficient;
     double frictionCoefficient;
+
+    // 仅用于模型 JSON 输出的几何尺寸，不参与单元力学计算。
+    double printModelWidth;
+    double printModelThickness;
 
     // 每个收敛步提交的反弯点距离，在下一步整体迭代期间保持不变。
     double committedContraflexureDistance;

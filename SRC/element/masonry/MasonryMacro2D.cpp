@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 
@@ -88,13 +89,14 @@ double getYieldStrain(UniaxialMaterial *material)
 // 命令格式：element masonryMacro tag iNode jNode bendingMat shearMat axialMat transfTag
 //           <-AxialForceInteraction width thickness fm cohesion ft <kd> <mu>>
 //           <-ExclusiveFailureMode>
+//           <-ForPrintModelJson width thickness>
 //           <-LocalIteration maximumIterations relativeTolerance>
 //           <-LocalIterationDisplacement maximumIterations relativeTolerance>
 void *OPS_MasonryMacro2D(void)
 {
     const int numberOfArguments = OPS_GetNumRemainingInputArgs();
     if (numberOfArguments < 7) {
-        opserr << "WARNING incorrect arguments: element masonryMacro tag iNode jNode bendingMat shearMat axialMat transfTag <-ExclusiveFailureMode> <-AxialForceInteraction width thickness fm cohesion ft <kd> <mu>> <-LocalIteration maximumIterations relativeTolerance> <-LocalIterationDisplacement maximumIterations relativeTolerance>" << endln;
+        opserr << "WARNING incorrect arguments: element masonryMacro tag iNode jNode bendingMat shearMat axialMat transfTag <-ExclusiveFailureMode> <-AxialForceInteraction width thickness fm cohesion ft <kd> <mu>> <-ForPrintModelJson width thickness> <-LocalIteration maximumIterations relativeTolerance> <-LocalIterationDisplacement maximumIterations relativeTolerance>" << endln;
         return 0;
     }
 
@@ -117,6 +119,7 @@ void *OPS_MasonryMacro2D(void)
 
     // 未输入截面和材料参数时保持原行为，不启用轴力相关骨架更新。
     double interactionData[7] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.85, 0.4};
+    double printModelData[2] = {-1.0, -1.0};
     int maximumIterations = 50;
     double relativeTolerance = 1.0e-8;
     bool useDisplacementConvergence = true;
@@ -129,6 +132,20 @@ void *OPS_MasonryMacro2D(void)
 
         if (std::strcmp(option, "-ExclusiveFailureMode") == 0) {
             useExclusiveFailureMode = true;
+            continue;
+        }
+
+        if (std::strcmp(option, "-ForPrintModelJson") == 0) {
+            if (remainingArguments < 2) {
+                opserr << "WARNING masonryMacro2D -ForPrintModelJson requires width and thickness" << endln;
+                return 0;
+            }
+            int numberOfData = 2;
+            if (OPS_GetDoubleInput(&numberOfData, printModelData) < 0) {
+                opserr << "WARNING masonryMacro2D failed to read -ForPrintModelJson parameters" << endln;
+                return 0;
+            }
+            remainingArguments -= 2;
             continue;
         }
 
@@ -158,24 +175,34 @@ void *OPS_MasonryMacro2D(void)
             return 0;
         }
 
-        // 若后面还有局部迭代选项，则为它保留三个输入；否则剩余输入全部属于轴力相关参数。
-        int numberOfInteractionData = remainingArguments > 7 ? remainingArguments - 3 : remainingArguments;
-        if (numberOfInteractionData < 5 || numberOfInteractionData > 7) {
+        if (remainingArguments < 5) {
             opserr << "WARNING masonryMacro2D -AxialForceInteraction requires width thickness fm cohesion ft <kd> <mu>" << endln;
             return 0;
         }
+        int numberOfInteractionData = 5;
         if (OPS_GetDoubleInput(&numberOfInteractionData, interactionData) < 0) {
             opserr << "WARNING masonryMacro2D failed to read axial-interaction parameters" << endln;
             return 0;
         }
-        remainingArguments -= numberOfInteractionData;
+        remainingArguments -= 5;
+        for (int i = 5; i < 7 && remainingArguments > 0; ++i) {
+            const char *valueText = OPS_GetString();
+            char *end = 0;
+            const double value = std::strtod(valueText, &end);
+            if (end == valueText || *end != '\0') {
+                OPS_ResetCurrentInputArg(-1);
+                break;
+            }
+            interactionData[i] = value;
+            --remainingArguments;
+        }
     }
 
-    return new MasonryMacro2D(integerData[0], integerData[1], integerData[2], *bendingMaterial, *shearMaterial, *axialMaterial, *coordinateTransformation, interactionData[0], interactionData[1], interactionData[2], interactionData[3], interactionData[4], interactionData[5], interactionData[6], maximumIterations, relativeTolerance, useDisplacementConvergence, useExclusiveFailureMode);
+    return new MasonryMacro2D(integerData[0], integerData[1], integerData[2], *bendingMaterial, *shearMaterial, *axialMaterial, *coordinateTransformation, interactionData[0], interactionData[1], interactionData[2], interactionData[3], interactionData[4], interactionData[5], interactionData[6], maximumIterations, relativeTolerance, useDisplacementConvergence, useExclusiveFailureMode, printModelData[0], printModelData[1]);
 }
 
-MasonryMacro2D::MasonryMacro2D(int tag, int nodeI, int nodeJ, UniaxialMaterial &bendingMaterial, UniaxialMaterial &shearMaterialInput, UniaxialMaterial &axialMaterialInput, CrdTransf &coordinateTransformation, double widthInput, double thicknessInput, double compressiveStrengthInput, double cohesionInput, double diagonalTensileStrengthInput, double stressBlockCoefficientInput, double frictionCoefficientInput, int maximumIterationsInput, double relativeToleranceInput, bool useDisplacementConvergenceInput, bool useExclusiveFailureModeInput)
-    : Element(tag, ELE_TAG_MasonryMacro2D), connectedExternalNodes(2), theCoordTransf(coordinateTransformation.getCopy2d()), shearMaterial(shearMaterialInput.getCopy()), axialMaterial(axialMaterialInput.getCopy()), width(widthInput), thickness(thicknessInput), compressiveStrength(compressiveStrengthInput), cohesion(cohesionInput), diagonalTensileStrength(diagonalTensileStrengthInput), stressBlockCoefficient(stressBlockCoefficientInput), frictionCoefficient(frictionCoefficientInput), committedContraflexureDistance(0.0), maximumIterations(maximumIterationsInput), relativeTolerance(relativeToleranceInput), useDisplacementConvergence(useDisplacementConvergenceInput), useExclusiveFailureMode(useExclusiveFailureModeInput), committedFailureMode(0), trialFailureMode(0), tangentStiffness(6, 6), initialStiffness(6, 6), resistingForce(6)
+MasonryMacro2D::MasonryMacro2D(int tag, int nodeI, int nodeJ, UniaxialMaterial &bendingMaterial, UniaxialMaterial &shearMaterialInput, UniaxialMaterial &axialMaterialInput, CrdTransf &coordinateTransformation, double widthInput, double thicknessInput, double compressiveStrengthInput, double cohesionInput, double diagonalTensileStrengthInput, double stressBlockCoefficientInput, double frictionCoefficientInput, int maximumIterationsInput, double relativeToleranceInput, bool useDisplacementConvergenceInput, bool useExclusiveFailureModeInput, double printModelWidthInput, double printModelThicknessInput)
+    : Element(tag, ELE_TAG_MasonryMacro2D), connectedExternalNodes(2), theCoordTransf(coordinateTransformation.getCopy2d()), shearMaterial(shearMaterialInput.getCopy()), axialMaterial(axialMaterialInput.getCopy()), width(widthInput), thickness(thicknessInput), compressiveStrength(compressiveStrengthInput), cohesion(cohesionInput), diagonalTensileStrength(diagonalTensileStrengthInput), stressBlockCoefficient(stressBlockCoefficientInput), frictionCoefficient(frictionCoefficientInput), printModelWidth(printModelWidthInput), printModelThickness(printModelThicknessInput), committedContraflexureDistance(0.0), maximumIterations(maximumIterationsInput), relativeTolerance(relativeToleranceInput), useDisplacementConvergence(useDisplacementConvergenceInput), useExclusiveFailureMode(useExclusiveFailureModeInput), committedFailureMode(0), trialFailureMode(0), tangentStiffness(6, 6), initialStiffness(6, 6), resistingForce(6)
 {
     connectedExternalNodes(0) = nodeI;
     connectedExternalNodes(1) = nodeJ;
@@ -186,7 +213,7 @@ MasonryMacro2D::MasonryMacro2D(int tag, int nodeI, int nodeJ, UniaxialMaterial &
 }
 
 MasonryMacro2D::MasonryMacro2D()
-    : Element(0, ELE_TAG_MasonryMacro2D), connectedExternalNodes(2), theCoordTransf(0), shearMaterial(0), axialMaterial(0), width(0.0), thickness(0.0), compressiveStrength(0.0), cohesion(0.0), diagonalTensileStrength(0.0), stressBlockCoefficient(0.85), frictionCoefficient(0.4), committedContraflexureDistance(0.0), maximumIterations(50), relativeTolerance(1.0e-8), useDisplacementConvergence(true), useExclusiveFailureMode(false), committedFailureMode(0), trialFailureMode(0), tangentStiffness(6, 6), initialStiffness(6, 6), resistingForce(6)
+    : Element(0, ELE_TAG_MasonryMacro2D), connectedExternalNodes(2), theCoordTransf(0), shearMaterial(0), axialMaterial(0), width(0.0), thickness(0.0), compressiveStrength(0.0), cohesion(0.0), diagonalTensileStrength(0.0), stressBlockCoefficient(0.85), frictionCoefficient(0.4), printModelWidth(-1.0), printModelThickness(-1.0), committedContraflexureDistance(0.0), maximumIterations(50), relativeTolerance(1.0e-8), useDisplacementConvergence(true), useExclusiveFailureMode(false), committedFailureMode(0), trialFailureMode(0), tangentStiffness(6, 6), initialStiffness(6, 6), resistingForce(6)
 {
     theNodes[0] = 0;
     theNodes[1] = 0;
@@ -732,7 +759,7 @@ int MasonryMacro2D::sendSelf(int commitTag, Channel &theChannel)
         idData(6 + 2 * i) = ensureMaterialDbTag(materials[i], theChannel);
     }
 
-    Vector vectorData(17);
+    Vector vectorData(19);
     vectorData(0) = alphaM;
     vectorData(1) = betaK;
     vectorData(2) = betaK0;
@@ -750,6 +777,8 @@ int MasonryMacro2D::sendSelf(int commitTag, Channel &theChannel)
     vectorData(14) = committedContraflexureDistance;
     vectorData(15) = useExclusiveFailureMode ? 1.0 : 0.0;
     vectorData(16) = committedFailureMode;
+    vectorData(17) = printModelWidth;
+    vectorData(18) = printModelThickness;
 
     if (theChannel.sendID(dataTag, commitTag, idData) < 0 || theChannel.sendVector(dataTag, commitTag, vectorData) < 0 || theCoordTransf->sendSelf(commitTag, theChannel) < 0) {
         return -1;
@@ -767,7 +796,7 @@ int MasonryMacro2D::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroke
 {
     int dataTag = this->getDbTag();
     ID idData(13);
-    Vector vectorData(17);
+    Vector vectorData(19);
     if (theChannel.recvID(dataTag, commitTag, idData) < 0 || theChannel.recvVector(dataTag, commitTag, vectorData) < 0) {
         return -1;
     }
@@ -793,6 +822,8 @@ int MasonryMacro2D::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroke
     useExclusiveFailureMode = vectorData(15) != 0.0;
     committedFailureMode = static_cast<int>(vectorData(16));
     trialFailureMode = committedFailureMode;
+    printModelWidth = vectorData(17);
+    printModelThickness = vectorData(18);
     if (theCoordTransf == 0 || theCoordTransf->getClassTag() != idData(3)) {
         delete theCoordTransf;
         theCoordTransf = theBroker.getNewCrdTransf(idData(3));
@@ -831,6 +862,8 @@ void MasonryMacro2D::Print(OPS_Stream &s, int flag)
 {
     if (flag == OPS_PRINT_PRINTMODEL_JSON) {
         // 输出模型定义所需的标签、几何参数和局部迭代选项。
+        const double jsonWidth = printModelWidth >= 0.0 ? printModelWidth : width;
+        const double jsonThickness = printModelThickness >= 0.0 ? printModelThickness : thickness;
         s << "\t\t\t{";
         s << "\"name\": " << this->getTag() << ", ";
         s << "\"type\": \"MasonryMacro2D\", ";
@@ -840,8 +873,8 @@ void MasonryMacro2D::Print(OPS_Stream &s, int flag)
         s << "\"axialMaterial\": \"" << axialMaterial->getTag() << "\", ";
         s << "\"crdTransformation\": \"" << theCoordTransf->getTag() << "\", ";
         s << "\"axialForceInteraction\": " << (width != 0.0 ? "true" : "false") << ", ";
-        s << "\"width\": " << width << ", ";
-        s << "\"thickness\": " << thickness << ", ";
+        s << "\"width\": " << jsonWidth << ", ";
+        s << "\"thickness\": " << jsonThickness << ", ";
         s << "\"compressiveStrength\": " << compressiveStrength << ", ";
         s << "\"cohesion\": " << cohesion << ", ";
         s << "\"diagonalTensileStrength\": " << diagonalTensileStrength << ", ";
