@@ -57,18 +57,44 @@ int receiveMaterial(UniaxialMaterial *&material, int classTag, int dbTag, int co
     return material->recvSelf(commitTag, theChannel, theBroker);
 }
 
+// material: 采用弹性路径试算、且不推进非线性历史的砌体材料。
+// strain: 当前试算变形。
+int setTrialLinearStrain(UniaxialMaterial *material, double strain)
+{
+    if (MasonryBendingMat *bendingMaterial = dynamic_cast<MasonryBendingMat *>(material)) {
+        return bendingMaterial->setTrialLinearStrain(strain);
+    }
+    if (MasonryShearMat *shearMaterial = dynamic_cast<MasonryShearMat *>(material)) {
+        return shearMaterial->setTrialLinearStrain(strain);
+    }
+    return -1;
+}
+
+// material: 需要读取当前骨架屈服变形的砌体材料。
+double getYieldStrain(UniaxialMaterial *material)
+{
+    if (MasonryBendingMat *bendingMaterial = dynamic_cast<MasonryBendingMat *>(material)) {
+        return bendingMaterial->getYieldStrain();
+    }
+    if (MasonryShearMat *shearMaterial = dynamic_cast<MasonryShearMat *>(material)) {
+        return shearMaterial->getYieldStrain();
+    }
+    return 0.0;
+}
+
 } // namespace
 
 // 解析三维局部平面内 masonryMacro 命令并创建单元。
 // 命令格式：element masonryMacro tag iNode jNode bendingMat shearMat axialMat transfTag
 //           <-AxialForceInteraction width thickness fm cohesion ft <kd> <mu>>
+//           <-ExclusiveFailureMode>
 //           <-LocalIteration maximumIterations relativeTolerance>
 //           <-LocalIterationDisplacement maximumIterations relativeTolerance>
 void *OPS_MasonryMacro3D(void)
 {
     const int numberOfArguments = OPS_GetNumRemainingInputArgs();
     if (numberOfArguments < 7) {
-        opserr << "WARNING incorrect arguments: element masonryMacro tag iNode jNode bendingMat shearMat axialMat transfTag <-AxialForceInteraction width thickness fm cohesion ft <kd> <mu>> <-LocalIteration maximumIterations relativeTolerance> <-LocalIterationDisplacement maximumIterations relativeTolerance>" << endln;
+        opserr << "WARNING incorrect arguments: element masonryMacro tag iNode jNode bendingMat shearMat axialMat transfTag <-ExclusiveFailureMode> <-AxialForceInteraction width thickness fm cohesion ft <kd> <mu>> <-LocalIteration maximumIterations relativeTolerance> <-LocalIterationDisplacement maximumIterations relativeTolerance>" << endln;
         return 0;
     }
 
@@ -94,11 +120,17 @@ void *OPS_MasonryMacro3D(void)
     int maximumIterations = 50;
     double relativeTolerance = 1.0e-8;
     bool useDisplacementConvergence = true;
+    bool useExclusiveFailureMode = false;
     bool localIterationOptionSpecified = false;
     int remainingArguments = numberOfArguments - 7;
     while (remainingArguments > 0) {
         const char *option = OPS_GetString();
         --remainingArguments;
+
+        if (std::strcmp(option, "-ExclusiveFailureMode") == 0) {
+            useExclusiveFailureMode = true;
+            continue;
+        }
 
         if (std::strcmp(option, "-LocalIteration") == 0 || std::strcmp(option, "-LocalIterationDisplacement") == 0) {
             if (localIterationOptionSpecified) {
@@ -139,11 +171,11 @@ void *OPS_MasonryMacro3D(void)
         remainingArguments -= numberOfInteractionData;
     }
 
-    return new MasonryMacro3D(integerData[0], integerData[1], integerData[2], *bendingMaterial, *shearMaterial, *axialMaterial, *coordinateTransformation, interactionData[0], interactionData[1], interactionData[2], interactionData[3], interactionData[4], interactionData[5], interactionData[6], maximumIterations, relativeTolerance, useDisplacementConvergence);
+    return new MasonryMacro3D(integerData[0], integerData[1], integerData[2], *bendingMaterial, *shearMaterial, *axialMaterial, *coordinateTransformation, interactionData[0], interactionData[1], interactionData[2], interactionData[3], interactionData[4], interactionData[5], interactionData[6], maximumIterations, relativeTolerance, useDisplacementConvergence, useExclusiveFailureMode);
 }
 
-MasonryMacro3D::MasonryMacro3D(int tag, int nodeI, int nodeJ, UniaxialMaterial &bendingMaterial, UniaxialMaterial &shearMaterialInput, UniaxialMaterial &axialMaterialInput, CrdTransf &coordinateTransformation, double widthInput, double thicknessInput, double compressiveStrengthInput, double cohesionInput, double diagonalTensileStrengthInput, double stressBlockCoefficientInput, double frictionCoefficientInput, int maximumIterationsInput, double relativeToleranceInput, bool useDisplacementConvergenceInput)
-    : Element(tag, ELE_TAG_MasonryMacro3D), connectedExternalNodes(2), theCoordTransf(coordinateTransformation.getCopy3d()), shearMaterial(shearMaterialInput.getCopy()), axialMaterial(axialMaterialInput.getCopy()), width(widthInput), thickness(thicknessInput), compressiveStrength(compressiveStrengthInput), cohesion(cohesionInput), diagonalTensileStrength(diagonalTensileStrengthInput), stressBlockCoefficient(stressBlockCoefficientInput), frictionCoefficient(frictionCoefficientInput), committedContraflexureDistance(0.0), maximumIterations(maximumIterationsInput), relativeTolerance(relativeToleranceInput), useDisplacementConvergence(useDisplacementConvergenceInput), tangentStiffness(12, 12), initialStiffness(12, 12), resistingForce(12)
+MasonryMacro3D::MasonryMacro3D(int tag, int nodeI, int nodeJ, UniaxialMaterial &bendingMaterial, UniaxialMaterial &shearMaterialInput, UniaxialMaterial &axialMaterialInput, CrdTransf &coordinateTransformation, double widthInput, double thicknessInput, double compressiveStrengthInput, double cohesionInput, double diagonalTensileStrengthInput, double stressBlockCoefficientInput, double frictionCoefficientInput, int maximumIterationsInput, double relativeToleranceInput, bool useDisplacementConvergenceInput, bool useExclusiveFailureModeInput)
+    : Element(tag, ELE_TAG_MasonryMacro3D), connectedExternalNodes(2), theCoordTransf(coordinateTransformation.getCopy3d()), shearMaterial(shearMaterialInput.getCopy()), axialMaterial(axialMaterialInput.getCopy()), width(widthInput), thickness(thicknessInput), compressiveStrength(compressiveStrengthInput), cohesion(cohesionInput), diagonalTensileStrength(diagonalTensileStrengthInput), stressBlockCoefficient(stressBlockCoefficientInput), frictionCoefficient(frictionCoefficientInput), committedContraflexureDistance(0.0), maximumIterations(maximumIterationsInput), relativeTolerance(relativeToleranceInput), useDisplacementConvergence(useDisplacementConvergenceInput), useExclusiveFailureMode(useExclusiveFailureModeInput), committedFailureMode(0), trialFailureMode(0), tangentStiffness(12, 12), initialStiffness(12, 12), resistingForce(12)
 {
     connectedExternalNodes(0) = nodeI;
     connectedExternalNodes(1) = nodeJ;
@@ -154,7 +186,7 @@ MasonryMacro3D::MasonryMacro3D(int tag, int nodeI, int nodeJ, UniaxialMaterial &
 }
 
 MasonryMacro3D::MasonryMacro3D()
-    : Element(0, ELE_TAG_MasonryMacro3D), connectedExternalNodes(2), theCoordTransf(0), shearMaterial(0), axialMaterial(0), width(0.0), thickness(0.0), compressiveStrength(0.0), cohesion(0.0), diagonalTensileStrength(0.0), stressBlockCoefficient(0.85), frictionCoefficient(0.4), committedContraflexureDistance(0.0), maximumIterations(50), relativeTolerance(1.0e-8), useDisplacementConvergence(true), tangentStiffness(12, 12), initialStiffness(12, 12), resistingForce(12)
+    : Element(0, ELE_TAG_MasonryMacro3D), connectedExternalNodes(2), theCoordTransf(0), shearMaterial(0), axialMaterial(0), width(0.0), thickness(0.0), compressiveStrength(0.0), cohesion(0.0), diagonalTensileStrength(0.0), stressBlockCoefficient(0.85), frictionCoefficient(0.4), committedContraflexureDistance(0.0), maximumIterations(50), relativeTolerance(1.0e-8), useDisplacementConvergence(true), useExclusiveFailureMode(false), committedFailureMode(0), trialFailureMode(0), tangentStiffness(12, 12), initialStiffness(12, 12), resistingForce(12)
 {
     theNodes[0] = 0;
     theNodes[1] = 0;
@@ -303,12 +335,14 @@ void MasonryMacro3D::setDomain(Domain *theDomain)
 
 int MasonryMacro3D::commitState(void)
 {
-    const double momentI = std::abs(bendingMaterials[0]->getStress());
-    const double momentJ = std::abs(bendingMaterials[1]->getStress());
+    const double momentI = bendingMaterials[0]->getStress();
+    const double momentJ = bendingMaterials[1]->getStress();
     const double momentSum = momentI + momentJ;
     const double V = std::abs(momentSum / theCoordTransf->getInitialLength());
-    double trialContraflexureDistance = std::max(std::abs(momentI), std::abs(momentJ)) / std::abs(V);
-    trialContraflexureDistance = std::min(trialContraflexureDistance, 1.0e8);
+    double trialContraflexureDistance = committedContraflexureDistance;
+    if (V > 0.0) {
+        trialContraflexureDistance = std::min(std::max(std::abs(momentI), std::abs(momentJ)) / V, 1.0e8);
+    }
     int result = this->Element::commitState();
     result += theCoordTransf->commitState();
     result += bendingMaterials[0]->commitState();
@@ -317,6 +351,7 @@ int MasonryMacro3D::commitState(void)
     result += axialMaterial->commitState();
     if (result == 0) {
         committedContraflexureDistance = trialContraflexureDistance;
+        committedFailureMode = trialFailureMode;
     }
     return result;
 }
@@ -328,6 +363,7 @@ int MasonryMacro3D::revertToLastCommit(void)
     result += bendingMaterials[1]->revertToLastCommit();
     result += shearMaterial->revertToLastCommit();
     result += axialMaterial->revertToLastCommit();
+    trialFailureMode = committedFailureMode;
     return result;
 }
 
@@ -339,6 +375,8 @@ int MasonryMacro3D::revertToStart(void)
     result += shearMaterial->revertToStart();
     result += axialMaterial->revertToStart();
     committedContraflexureDistance = theCoordTransf->getInitialLength() / 2.0;
+    committedFailureMode = 0;
+    trialFailureMode = 0;
     resistingForce.Zero();
     return result;
 }
@@ -385,6 +423,17 @@ int MasonryMacro3D::update(void)
         return result;
     }
 
+    trialFailureMode = committedFailureMode;
+    result = this->solveInternalShearDeformation(eleTrialDeformation(1), eleTrialDeformation(2), axialMaterial->getStress());
+    if (result != 0 || !useExclusiveFailureMode || committedFailureMode != 0) {
+        return result;
+    }
+
+    // 首次越过屈服点后锁定控制模式，并按锁定后的弹簧组合重新满足内部平衡。
+    result = this->selectTrialFailureMode();
+    if (result != 0 || trialFailureMode == 0) {
+        return result;
+    }
     return this->solveInternalShearDeformation(eleTrialDeformation(1), eleTrialDeformation(2), axialMaterial->getStress());
 }
 
@@ -447,9 +496,25 @@ int MasonryMacro3D::evaluateInternalShearResidual(double thetaI, double thetaJ, 
     const double length = theCoordTransf->getInitialLength();
     const double rotationI = thetaI + shearDeformation / length;
     const double rotationJ = thetaJ + shearDeformation / length;
-    int result = shearMaterial->setTrialStrain(shearDeformation);
-    result += bendingMaterials[0]->setTrialStrain(rotationI);
-    result += bendingMaterials[1]->setTrialStrain(rotationJ);
+    int result = 0;
+    if (useExclusiveFailureMode && trialFailureMode == 0) {
+        // 锁定前两类弹簧均按弹性直线试算，以弹性需求比判断真正首先屈服的模式。
+        result = setTrialLinearStrain(shearMaterial, shearDeformation);
+        result += setTrialLinearStrain(bendingMaterials[0], rotationI);
+        result += setTrialLinearStrain(bendingMaterials[1], rotationJ);
+    } else if (useExclusiveFailureMode && trialFailureMode == 1) {
+        result = shearMaterial->setTrialStrain(shearDeformation);
+        result += setTrialLinearStrain(bendingMaterials[0], rotationI);
+        result += setTrialLinearStrain(bendingMaterials[1], rotationJ);
+    } else if (useExclusiveFailureMode && trialFailureMode == 2) {
+        result = setTrialLinearStrain(shearMaterial, shearDeformation);
+        result += bendingMaterials[0]->setTrialStrain(rotationI);
+        result += bendingMaterials[1]->setTrialStrain(rotationJ);
+    } else {
+        result = shearMaterial->setTrialStrain(shearDeformation);
+        result += bendingMaterials[0]->setTrialStrain(rotationI);
+        result += bendingMaterials[1]->setTrialStrain(rotationJ);
+    }
     if (result != 0) {
         return result;
     }
@@ -459,6 +524,27 @@ int MasonryMacro3D::evaluateInternalShearResidual(double thetaI, double thetaJ, 
     const double shearForce = shearMaterial->getStress();
     residual = momentI + momentJ + shearForce * length - axialForce * shearDeformation;
     residualScale = std::max(1.0, std::abs(momentI) + std::abs(momentJ) + std::abs(shearForce * length) + std::abs(axialForce * shearDeformation));
+    return 0;
+}
+
+int MasonryMacro3D::selectTrialFailureMode(void)
+{
+    const double shearYieldStrain = getYieldStrain(shearMaterial);
+    const double bendingYieldStrainI = getYieldStrain(bendingMaterials[0]);
+    const double bendingYieldStrainJ = getYieldStrain(bendingMaterials[1]);
+    if (shearYieldStrain <= 0.0 || bendingYieldStrainI <= 0.0 || bendingYieldStrainJ <= 0.0) {
+        opserr << "MasonryMacro3D::selectTrialFailureMode - element " << this->getTag() << " requires MasonryBendingMat or MasonryShearMat for bending and MasonryShearMat for shear" << endln;
+        return -1;
+    }
+
+    const double shearRatio = std::abs(shearMaterial->getStrain()) / shearYieldStrain;
+    const double bendingRatioI = std::abs(bendingMaterials[0]->getStrain()) / bendingYieldStrainI;
+    const double bendingRatioJ = std::abs(bendingMaterials[1]->getStrain()) / bendingYieldStrainJ;
+    const double bendingRatio = std::max(bendingRatioI, bendingRatioJ);
+    if (shearRatio <= 1.0 && bendingRatio <= 1.0) {
+        return 0;
+    }
+    trialFailureMode = shearRatio >= bendingRatio ? 1 : 2;
     return 0;
 }
 
@@ -736,7 +822,7 @@ int MasonryMacro3D::sendSelf(int commitTag, Channel &theChannel)
         idData(6 + 2 * i) = ensureMaterialDbTag(materials[i], theChannel);
     }
 
-    Vector vectorData(15);
+    Vector vectorData(17);
     vectorData(0) = alphaM;
     vectorData(1) = betaK;
     vectorData(2) = betaK0;
@@ -752,6 +838,8 @@ int MasonryMacro3D::sendSelf(int commitTag, Channel &theChannel)
     vectorData(12) = relativeTolerance;
     vectorData(13) = useDisplacementConvergence ? 1.0 : 0.0;
     vectorData(14) = committedContraflexureDistance;
+    vectorData(15) = useExclusiveFailureMode ? 1.0 : 0.0;
+    vectorData(16) = committedFailureMode;
 
     if (theChannel.sendID(dataTag, commitTag, idData) < 0 || theChannel.sendVector(dataTag, commitTag, vectorData) < 0 || theCoordTransf->sendSelf(commitTag, theChannel) < 0) {
         return -1;
@@ -761,7 +849,7 @@ int MasonryMacro3D::sendSelf(int commitTag, Channel &theChannel)
             return -1;
         }
     }
-    // 当前单元没有额外的单元级历史变量。
+    // TODO: 若核心模型新增单元级历史变量，应同步扩展这里和 recvSelf 的数据布局。
     return 0;
 }
 
@@ -769,7 +857,7 @@ int MasonryMacro3D::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroke
 {
     int dataTag = this->getDbTag();
     ID idData(13);
-    Vector vectorData(15);
+    Vector vectorData(17);
     if (theChannel.recvID(dataTag, commitTag, idData) < 0 || theChannel.recvVector(dataTag, commitTag, vectorData) < 0) {
         return -1;
     }
@@ -792,6 +880,9 @@ int MasonryMacro3D::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroke
     relativeTolerance = vectorData(12);
     useDisplacementConvergence = vectorData(13) != 0.0;
     committedContraflexureDistance = vectorData(14);
+    useExclusiveFailureMode = vectorData(15) != 0.0;
+    committedFailureMode = static_cast<int>(vectorData(16));
+    trialFailureMode = committedFailureMode;
     if (theCoordTransf == 0 || theCoordTransf->getClassTag() != idData(3)) {
         delete theCoordTransf;
         theCoordTransf = theBroker.getNewCrdTransf(idData(3));
@@ -810,7 +901,7 @@ int MasonryMacro3D::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroke
             return -1;
         }
     }
-    // 当前单元没有额外的单元级历史变量。
+    // TODO: 若核心模型新增单元级历史变量，应同步扩展这里和 sendSelf 的数据布局。
     return 0;
 }
 
@@ -848,7 +939,8 @@ void MasonryMacro3D::Print(OPS_Stream &s, int flag)
         s << "\"frictionCoefficient\": " << frictionCoefficient << ", ";
         s << "\"maximumIterations\": " << maximumIterations << ", ";
         s << "\"relativeTolerance\": " << relativeTolerance << ", ";
-        s << "\"localIterationConvergence\": \"" << (useDisplacementConvergence ? "displacement" : "force") << "\"}";
+        s << "\"localIterationConvergence\": \"" << (useDisplacementConvergence ? "displacement" : "force") << "\", ";
+        s << "\"exclusiveFailureMode\": " << (useExclusiveFailureMode ? "true" : "false") << "}";
         return;
     }
 
@@ -857,6 +949,9 @@ void MasonryMacro3D::Print(OPS_Stream &s, int flag)
         s << "  axial interaction: width=" << width << " thickness=" << thickness << " fm=" << compressiveStrength << " cohesion=" << cohesion << " ft=" << diagonalTensileStrength << " committedH0=" << committedContraflexureDistance << endln;
     }
     s << "  local iteration: maximumIterations=" << maximumIterations << " relativeTolerance=" << relativeTolerance << " convergence=" << (useDisplacementConvergence ? "displacement" : "force") << endln;
+    if (useExclusiveFailureMode) {
+        s << "  exclusive failure mode: " << committedFailureMode << " (0=unlocked, 1=shear, 2=flexural)" << endln;
+    }
 }
 
 Response *MasonryMacro3D::setResponse(const char **argv, int argc, OPS_Stream &output)
