@@ -645,6 +645,15 @@ const Matrix &MasonryMacro2D::getTangentStiff(void)
     // ∂Mj/∂thetaJ = Mj' * (1 - Mj' / (Mi' + Mj' + V'*L^2 - N*L))
     // ∂Mi/∂thetaI = Mi' * (1 - Mi' / (Mi' + Mj' + V'*L^2 - N*L))
     // ∂Mi/∂thetaJ = -Mi' * Mj' / (Mi' + Mj' + V'*L^2 - N*L)
+    //
+    // 轴向基本变形 u 通过 N=N(u) 改变平衡项 -N*Delta。此处冻结材料骨架对 N 的显式依赖，令 N'=∂N/∂u，并定义：
+    // D = Mi' + Mj' + V'*L^2 - N*L
+    // 对平衡方程关于 u 求导得到：
+    // ∂Delta/∂u = N'*Delta*L / D
+    // 因此两个端弯矩对轴向变形的耦合刚度为：
+    // ∂Mi/∂u = Mi'*N'*Delta / D
+    // ∂Mj/∂u = Mj'*N'*Delta / D
+    // 轴向材料本身不依赖端部转角，所以 ∂N/∂thetaI 和 ∂N/∂thetaJ 仍为零，基本切线矩阵可以是非对称的。
 
     Matrix basicStiffness(3, 3);
     basicStiffness.Zero();
@@ -652,12 +661,14 @@ const Matrix &MasonryMacro2D::getTangentStiff(void)
     // 轴向
     basicStiffness(0, 0) = axialMaterial->getTangent();
 
-    // 横向切线采用冻结当前轴力的近似，忽略轴向变形引起的弯矩增量。
+    // 材料骨架对轴力的依赖仍采用冻结当前轴力的近似，但保留平衡项 -N*Delta 引起的轴向—弯矩耦合。
     const double Mj_prime = bendingMaterials[1]->getTangent();
     const double Mi_prime = bendingMaterials[0]->getTangent();
     const double V_prime = shearMaterial->getTangent();
     const double L = theCoordTransf->getInitialLength();
     const double N = axialMaterial->getStress();
+    const double N_prime = axialMaterial->getTangent();
+    const double Delta = shearMaterial->getStrain();
     const double condensedDenominator = Mi_prime + Mj_prime + V_prime * L * L - N * L;
     const double denominatorScale = std::max(1.0, std::abs(Mi_prime) + std::abs(Mj_prime) + std::abs(V_prime * L * L) + std::abs(N * L));
     if (std::abs(condensedDenominator) <= 100.0 * std::numeric_limits<double>::epsilon() * denominatorScale) {
@@ -671,6 +682,8 @@ const Matrix &MasonryMacro2D::getTangentStiff(void)
     basicStiffness(1, 2) = -Mi_prime * Mj_prime / condensedDenominator;
     basicStiffness(2, 1) = basicStiffness(1, 2);
     basicStiffness(2, 2) = Mj_prime * (1.0 - Mj_prime / condensedDenominator);
+    basicStiffness(1, 0) = Mi_prime * N_prime * Delta / condensedDenominator;
+    basicStiffness(2, 0) = Mj_prime * N_prime * Delta / condensedDenominator;
 
     Vector basicForce(3);
     basicForce(0) = axialMaterial->getStress();
