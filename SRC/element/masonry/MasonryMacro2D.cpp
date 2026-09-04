@@ -353,10 +353,10 @@ int MasonryMacro2D::update(void)
     // 
     //  thetaI = phiI - Delta / L
     //  thetaJ = phiJ - Delta / L
-    //  Mi(phiI) + Mj(phiJ) + V(Delta) * L =  N * Delta    (平衡方程)
+    //  Mi(phiI) + Mj(phiJ) + V(Delta) * L = N * Delta * (sqrt(1 - (Delta/L)^2) - 1)    (平衡方程)
     // 
     // 将上两个方程代入第三个方程，得到 (仅关于 Delta)：
-    // Mi(thetaI + Delta / L) + Mj(thetaJ + Delta / L) + V(Delta) * L =  N * Delta
+    // Mi(thetaI + Delta / L) + Mj(thetaJ + Delta / L) + V(Delta) * L = N * Delta * (sqrt(1 - (Delta/L)^2) - 1)
 
     // 获取当前单元的基本位移向量 [轴向，转角I，转角J]
     const Vector &eleTrialDeformation = theCoordTransf->getBasicTrialDisp();
@@ -473,8 +473,15 @@ int MasonryMacro2D::evaluateInternalShearResidual(double thetaI, double thetaJ, 
     const double momentI = bendingMaterials[0]->getStress();
     const double momentJ = bendingMaterials[1]->getStress();
     const double shearForce = shearMaterial->getStress();
-    residual = momentI + momentJ + shearForce * length - axialForce * shearDeformation;
-    residualScale = std::max(1.0, std::abs(momentI) + std::abs(momentJ) + std::abs(shearForce * length) + std::abs(axialForce * shearDeformation));
+    const double deformationRatio = shearDeformation / length;
+    const double cosineSquared = 1.0 - deformationRatio * deformationRatio;
+    if (cosineSquared <= 0.0) {
+        return -1;
+    }
+    const double cosine = std::sqrt(cosineSquared);
+    const double axialMoment = axialForce * shearDeformation * (cosine - 1.0);
+    residual = momentI + momentJ + shearForce * length - axialMoment;
+    residualScale = std::max(1.0, std::abs(momentI) + std::abs(momentJ) + std::abs(shearForce * length) + std::abs(axialMoment));
     return 0;
 }
 
@@ -517,8 +524,11 @@ int MasonryMacro2D::solveInternalShearDeformationByNewton(double thetaI, double 
         const double tangentI = bendingMaterials[0]->getTangent();
         const double tangentJ = bendingMaterials[1]->getTangent();
         const double shearTangent = shearMaterial->getTangent();
-        const double residualTangent = tangentI / length + tangentJ / length + shearTangent * length - axialForce;
-        const double tangentScale = std::max(1.0, std::abs(tangentI / length) + std::abs(tangentJ / length) + std::abs(shearTangent * length) + std::abs(axialForce));
+        const double deformationRatio = shearDeformation / length;
+        const double cosine = std::sqrt(1.0 - deformationRatio * deformationRatio);
+        const double geometryTangent = cosine - 1.0 - deformationRatio * deformationRatio / cosine;
+        const double residualTangent = tangentI / length + tangentJ / length + shearTangent * length - axialForce * geometryTangent;
+        const double tangentScale = std::max(1.0, std::abs(tangentI / length) + std::abs(tangentJ / length) + std::abs(shearTangent * length) + std::abs(axialForce * geometryTangent));
         if (std::abs(residualTangent) <= 100.0 * std::numeric_limits<double>::epsilon() * tangentScale) {
             break;
         }
@@ -530,7 +540,8 @@ int MasonryMacro2D::solveInternalShearDeformationByNewton(double thetaI, double 
         if (useDisplacementConvergence && std::abs(correction) <= relativeTolerance * std::max(1.0, std::abs(shearDeformation))) {
             return 0;
         }
-        shearDeformation -= correction;
+        const double maximumShearDeformation = length * (1.0 - 1.0e-12);
+        shearDeformation = std::max(-maximumShearDeformation, std::min(maximumShearDeformation, shearDeformation - correction));
     }
     return -1;
 }
@@ -562,8 +573,9 @@ int MasonryMacro2D::solveInternalShearDeformationByBisection(double thetaI, doub
     bool bracketFound = false;
     double searchRadius = std::max(1.0, length) * 1.0e-6;
     for (int search = 0; search < 50; ++search) {
-        const double leftDeformation = initialShearDeformation - searchRadius;
-        const double rightDeformation = initialShearDeformation + searchRadius;
+        const double maximumShearDeformation = length * (1.0 - 1.0e-12);
+        const double leftDeformation = std::max(-maximumShearDeformation, initialShearDeformation - searchRadius);
+        const double rightDeformation = std::min(maximumShearDeformation, initialShearDeformation + searchRadius);
         double leftResidual = 0.0;
         double rightResidual = 0.0;
         double trialResidualScale = 1.0;
@@ -590,6 +602,9 @@ int MasonryMacro2D::solveInternalShearDeformationByBisection(double thetaI, doub
                 upperResidual = rightResidual;
             }
             bracketFound = true;
+            break;
+        }
+        if (leftDeformation == -maximumShearDeformation && rightDeformation == maximumShearDeformation) {
             break;
         }
         searchRadius *= 2.0;
@@ -636,32 +651,29 @@ const Matrix &MasonryMacro2D::getTangentStiff(void)
     // ∂Mi/∂thetaI = Mi' * (1 + ∂Delta/∂thetaI / L)
     // ∂Mi/∂thetaJ = Mi' * ∂Delta/∂thetaJ / L
     // 
-    // 其中 ∂Delta/∂thetaI 和 ∂Delta/∂thetaJ 由平衡方程 Mi(phiI) + Mj(phiJ) + V(Delta) * L =  N * Delta 对 Delta 求导得到：
-    // ∂Delta/∂thetaI = -Mi' / (Mi'/L + Mj'/L + V'*L - N)
-    // ∂Delta/∂thetaJ = -Mj' / (Mi'/L + Mj'/L + V'*L - N)
+    // 令 c=sqrt(1-(Delta/L)^2)，g=Delta*(c-1)，平衡方程写为：
+    // R = Mi(phiI) + Mj(phiJ) + V(Delta)*L - N*g = 0
+    // g' = c - 1 - (Delta/L)^2/c
+    // D = L*∂R/∂Delta = Mi' + Mj' + V'*L^2 - N*L*g'
+    // ∂Delta/∂thetaI = -Mi'*L/D
+    // ∂Delta/∂thetaJ = -Mj'*L/D
     // 
     // 代入上式得到基本切线刚度矩阵：
-    // ∂Mj/∂thetaI = -Mj' * Mi' / (Mi' + Mj' + V'*L^2 - N*L)
-    // ∂Mj/∂thetaJ = Mj' * (1 - Mj' / (Mi' + Mj' + V'*L^2 - N*L))
-    // ∂Mi/∂thetaI = Mi' * (1 - Mi' / (Mi' + Mj' + V'*L^2 - N*L))
-    // ∂Mi/∂thetaJ = -Mi' * Mj' / (Mi' + Mj' + V'*L^2 - N*L)
+    // ∂Mj/∂thetaI = -Mj'*Mi'/D
+    // ∂Mj/∂thetaJ = Mj'*(1-Mj'/D)
+    // ∂Mi/∂thetaI = Mi'*(1-Mi'/D)
+    // ∂Mi/∂thetaJ = -Mi'*Mj'/D
     //
-    // 轴向基本变形 u 通过 N=N(u) 改变平衡项 -N*Delta。此处冻结材料骨架对 N 的显式依赖，令 N'=∂N/∂u，并定义：
-    // D = Mi' + Mj' + V'*L^2 - N*L
-    // 对平衡方程关于 u 求导得到：
-    // ∂Delta/∂u = N'*Delta*L / D
-    // 因此两个端弯矩对轴向变形的耦合刚度为：
-    // ∂Mi/∂u = Mi'*N'*Delta / D
-    // ∂Mj/∂u = Mj'*N'*Delta / D
-    // 轴向材料本身不依赖端部转角，所以 ∂N/∂thetaI 和 ∂N/∂thetaJ 仍为零，基本切线矩阵可以是非对称的。
+    // 轴向基本变形 u 通过 N=N(u) 改变 -N*g。冻结材料骨架对 N 的显式依赖并令 N'=∂N/∂u，可得：
+    // ∂Delta/∂u = N'*g*L/D
+    // ∂Mi/∂u = Mi'*N'*g/D，∂Mj/∂u = Mj'*N'*g/D
+    // 单元传给坐标转换的轴向基本力为 P=N+V*Delta/L，令 H'=∂(V*Delta/L)/∂Delta=(V'*Delta+V)/L，则：
+    // ∂P/∂x = N'*∂u/∂x + H'*∂Delta/∂x
 
     Matrix basicStiffness(3, 3);
     basicStiffness.Zero();
 
-    // 轴向
-    basicStiffness(0, 0) = axialMaterial->getTangent();
-
-    // 材料骨架对轴力的依赖仍采用冻结当前轴力的近似，但保留平衡项 -N*Delta 引起的轴向—弯矩耦合。
+    // 材料骨架对轴力的依赖仍采用冻结当前轴力的近似，但保留新平衡方程引起的轴向—弯矩耦合。
     const double Mj_prime = bendingMaterials[1]->getTangent();
     const double Mi_prime = bendingMaterials[0]->getTangent();
     const double V_prime = shearMaterial->getTangent();
@@ -669,24 +681,38 @@ const Matrix &MasonryMacro2D::getTangentStiff(void)
     const double N = axialMaterial->getStress();
     const double N_prime = axialMaterial->getTangent();
     const double Delta = shearMaterial->getStrain();
-    const double condensedDenominator = Mi_prime + Mj_prime + V_prime * L * L - N * L;
-    const double denominatorScale = std::max(1.0, std::abs(Mi_prime) + std::abs(Mj_prime) + std::abs(V_prime * L * L) + std::abs(N * L));
+    const double V = shearMaterial->getStress();
+    const double deformationRatio = Delta / L;
+    const double cosine = std::sqrt(1.0 - deformationRatio * deformationRatio);
+    const double geometryFunction = Delta * (cosine - 1.0);
+    const double geometryTangent = cosine - 1.0 - deformationRatio * deformationRatio / cosine;
+    const double condensedDenominator = Mi_prime + Mj_prime + V_prime * L * L - N * L * geometryTangent;
+    const double denominatorScale = std::max(1.0, std::abs(Mi_prime) + std::abs(Mj_prime) + std::abs(V_prime * L * L) + std::abs(N * L * geometryTangent));
     if (std::abs(condensedDenominator) <= 100.0 * std::numeric_limits<double>::epsilon() * denominatorScale) {
         opserr << "MasonryMacro2D::getTangentStiff - element " << this->getTag() << " has a singular condensed tangent" << endln;
         tangentStiffness.Zero();
         return tangentStiffness;
     }
 
-    // 刚度
+    // 内部剪切变形对三个基本变形的导数。
+    const double Delta_u = N_prime * geometryFunction * L / condensedDenominator;
+    const double Delta_thetaI = -Mi_prime * L / condensedDenominator;
+    const double Delta_thetaJ = -Mj_prime * L / condensedDenominator;
+    const double axialProjectionTangent = (V_prime * Delta + V) / L;
+
+    // 组装轴向基本力 P=N+V*Delta/L 和两个端弯矩的一致切线。
+    basicStiffness(0, 0) = N_prime + axialProjectionTangent * Delta_u;
+    basicStiffness(0, 1) = axialProjectionTangent * Delta_thetaI;
+    basicStiffness(0, 2) = axialProjectionTangent * Delta_thetaJ;
     basicStiffness(1, 1) = Mi_prime * (1.0 - Mi_prime / condensedDenominator);
     basicStiffness(1, 2) = -Mi_prime * Mj_prime / condensedDenominator;
     basicStiffness(2, 1) = basicStiffness(1, 2);
     basicStiffness(2, 2) = Mj_prime * (1.0 - Mj_prime / condensedDenominator);
-    basicStiffness(1, 0) = Mi_prime * N_prime * Delta / condensedDenominator;
-    basicStiffness(2, 0) = Mj_prime * N_prime * Delta / condensedDenominator;
+    basicStiffness(1, 0) = Mi_prime * N_prime * geometryFunction / condensedDenominator;
+    basicStiffness(2, 0) = Mj_prime * N_prime * geometryFunction / condensedDenominator;
 
     Vector basicForce(3);
-    basicForce(0) = axialMaterial->getStress();
+    basicForce(0) = N + V * Delta / L;
     basicForce(1) = bendingMaterials[0]->getStress();
     basicForce(2) = bendingMaterials[1]->getStress();
 
@@ -714,7 +740,7 @@ const Matrix &MasonryMacro2D::getInitialStiff(void)
         return initialStiffness;
     }
 
-    // 初始状态取 N=0，并对内部剪切变形执行与当前切线相同的静力凝聚。
+    // 初始状态 N=V=Delta=0，新几何项及轴向投影项均为零。
     initialBasicStiffness(0, 0) = axialTangent;
     initialBasicStiffness(1, 1) = tangentI * (1.0 - tangentI / condensedDenominator);
     initialBasicStiffness(1, 2) = -tangentI * tangentJ / condensedDenominator;
@@ -728,15 +754,18 @@ const Matrix &MasonryMacro2D::getInitialStiff(void)
 const Vector &MasonryMacro2D::getResistingForce(void)
 // 从各材料读取当前内力，组装并转换为 6 维全局节点恢复力。
 {
-    // 轴力
+    // N 为轴向弹簧力，单元轴向基本力还包含剪力沿单元轴线的投影 V*Delta/L。
     double axialForce = axialMaterial->getStress();
+    double shearForce = shearMaterial->getStress();
+    double shearDeformation = shearMaterial->getStrain();
+    double length = theCoordTransf->getInitialLength();
     // Mi
     double momentI = bendingMaterials[0]->getStress();
     // Mj
     double momentJ = bendingMaterials[1]->getStress();
 
     Vector basicForce(3);
-    basicForce (0) = axialForce;
+    basicForce (0) = axialForce + shearForce * shearDeformation / length;
     basicForce (1) = momentI;
     basicForce (2) = momentJ;
 
