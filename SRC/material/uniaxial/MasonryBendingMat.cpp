@@ -3,7 +3,7 @@
 // 功能: MasonryBendingMat 砌体弯曲单轴材料实现与 OPS 工厂函数
 // 使用流程: 工厂函数读取材料参数 -> 状态机判断骨架/卸载/再加载分支
 //           -> 计算弯矩和切线 -> commitState 提交历史
-// 输入: matTag, Ke, Mmax, uu 以及可选的 R_My、CF、CD、gamma1、gamma2
+// 输入: matTag, Ke, Mmax, uu 以及可选的 R_My、CF、CD、gamma1、gamma2、postUltimateStiffness
 // 输出: OpenSees UniaxialMaterial，返回弯矩-转角关系
 // ============================================================================
 
@@ -34,7 +34,7 @@ void *OPS_MasonryBendingMat(void)
   if (OPS_GetNumRemainingInputArgs() < 3) {
     opserr << "WARNING invalid args, want: uniaxialMaterial MasonryBendingMat "
            << "tag? Ke? Mmax? <uu?> <R_My?> <CF?> <CD?> "
-           << "<gamma1?> <gamma2?>\n";
+           << "<gamma1?> <gamma2?> <postUltimateStiffness?>\n";
     return 0;
   }
 
@@ -45,11 +45,11 @@ void *OPS_MasonryBendingMat(void)
     return 0;
   }
 
-  // 两个必选实数加六个可选实数，共八个实数参数。
-  double data[8];
+  // 两个必选实数加七个可选实数，共九个实数参数。
+  double data[9];
   numData = OPS_GetNumRemainingInputArgs();
-  if (numData > 8)
-    numData = 8;
+  if (numData > 9)
+    numData = 9;
   if (OPS_GetDoubleInput(&numData, data) != 0) {
     opserr << "WARNING invalid MasonryBendingMat parameters" << endln;
     return 0;
@@ -63,7 +63,8 @@ void *OPS_MasonryBendingMat(void)
     case 5: material = new MasonryBendingMat(tag, data[0], data[1], data[2], data[3], data[4]); break;
     case 6: material = new MasonryBendingMat(tag, data[0], data[1], data[2], data[3], data[4], data[5]); break;
     case 7: material = new MasonryBendingMat(tag, data[0], data[1], data[2], data[3], data[4], data[5], data[6]); break;
-    default: material = new MasonryBendingMat(tag, data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7]); break;
+    case 8: material = new MasonryBendingMat(tag, data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7]); break;
+    default: material = new MasonryBendingMat(tag, data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8]); break;
   }
 
   if (material == 0) {
@@ -76,10 +77,10 @@ void *OPS_MasonryBendingMat(void)
 // 全参构造函数。
 MasonryBendingMat::MasonryBendingMat(
     int tag, double _Ke, double _Mmax, double _uu, double _R_My,
-    double _CF, double _CD, double _gamma1, double _gamma2)
+    double _CF, double _CD, double _gamma1, double _gamma2, double _postUltimateStiffness)
   : UniaxialMaterial(tag, MAT_TAG_MasonryBendingMat),
     Ke(_Ke), initialMmax(_Mmax), Mmax(_Mmax), committedMmax(_Mmax), uu(_uu), R_My(_R_My),
-    CF(_CF), CD(_CD), gamma1(_gamma1), gamma2(_gamma2),
+    CF(_CF), CD(_CD), gamma1(_gamma1), gamma2(_gamma2), postUltimateStiffness(_postUltimateStiffness),
     tState(), cState(), My(0.0), uy(0.0), Kp(0.0)
 {
   updateDerivedParameters();
@@ -91,7 +92,7 @@ MasonryBendingMat::MasonryBendingMat(
 MasonryBendingMat::MasonryBendingMat()
   : UniaxialMaterial(0, MAT_TAG_MasonryBendingMat),
     Ke(0.0), initialMmax(0.0), Mmax(0.0), committedMmax(0.0), uu(0.008), R_My(0.7),
-    CF(0.2), CD(0.1), gamma1(1.2), gamma2(1.2),
+    CF(0.2), CD(0.1), gamma1(1.2), gamma2(1.2), postUltimateStiffness(0.0),
     tState(), cState(), My(0.0), uy(0.0), Kp(0.0)
 {
   tState = initialState();
@@ -202,8 +203,8 @@ UniaxialMaterial *MasonryBendingMat::getCopy(void)
 // 发送材料参数和完整已提交状态。
 int MasonryBendingMat::sendSelf(int commitTag, Channel &theChannel)
 {
-  // data(0)为材料tag，data(1..8)为参数，data(9)为已提交骨架峰值，data(10..19)为状态。
-  static Vector data(20);
+  // data(0)为材料tag，data(1..8)为原有参数，data(9..19)为骨架和状态，data(20)为极限转角后刚度。
+  static Vector data(21);
   data(0) = getTag();
   data(1) = Ke; data(2) = initialMmax; data(3) = uu; data(4) = R_My;
   data(5) = CF; data(6) = CD; data(7) = gamma1; data(8) = gamma2;
@@ -218,6 +219,7 @@ int MasonryBendingMat::sendSelf(int commitTag, Channel &theChannel)
   data(17) = cState.revStress;
   data(18) = cState.directUnloading3 ? 1.0 : 0.0;
   data(19) = cState.maxAbsStrain;
+  data(20) = postUltimateStiffness;
 
   int result = theChannel.sendVector(getDbTag(), commitTag, data);
   if (result < 0)
@@ -229,7 +231,7 @@ int MasonryBendingMat::sendSelf(int commitTag, Channel &theChannel)
 int MasonryBendingMat::recvSelf(
     int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker)
 {
-  static Vector data(20);
+  static Vector data(21);
   int result = theChannel.recvVector(getDbTag(), commitTag, data);
   if (result < 0) {
     opserr << "MasonryBendingMat::recvSelf() - failed to receive data\n";
@@ -253,6 +255,7 @@ int MasonryBendingMat::recvSelf(
   cState.revStress = data(17);
   cState.directUnloading3 = data(18) != 0.0;
   cState.maxAbsStrain = data(19);
+  postUltimateStiffness = data(20);
   tState = cState;
   return 0;
 }
@@ -272,7 +275,8 @@ void MasonryBendingMat::Print(OPS_Stream &s, int flag)
     s << "\"CF\": " << CF << ", ";
     s << "\"CD\": " << CD << ", ";
     s << "\"gamma1\": " << gamma1 << ", ";
-    s << "\"gamma2\": " << gamma2 << "}";
+    s << "\"gamma2\": " << gamma2 << ", ";
+    s << "\"postUltimateStiffness\": " << postUltimateStiffness << "}";
     return;
   }
 
@@ -281,7 +285,7 @@ void MasonryBendingMat::Print(OPS_Stream &s, int flag)
   s << "  My: " << My << " uy: " << uy << " Kp: " << Kp << endln;
   s << "  R_My: " << R_My << " CF: " << CF
     << " CD: " << CD << " gamma1: " << gamma1
-    << " gamma2: " << gamma2 << endln;
+    << " gamma2: " << gamma2 << " postUltimateStiffness: " << postUltimateStiffness << endln;
   s << "  trial: strain=" << tState.strain << " stress=" << tState.stress << " tangent=" << tState.tangent << " branch=" << static_cast<int>(tState.branch) << " direction=" << tState.ldir << endln;
   s << "  committed: strain=" << cState.strain << " stress=" << cState.stress << " tangent=" << cState.tangent << " branch=" << static_cast<int>(cState.branch) << " direction=" << cState.ldir << " maxAbsStrain=" << cState.maxAbsStrain << endln;
 }
@@ -318,9 +322,15 @@ void MasonryBendingMat::backbone(double rotation, double &moment, double &tangen
     moment = sign * (My + Kp * (absoluteRotation - uy));
     tangent = Kp;
   } else {
-    // 达到极限转角后保持最后的弯矩水平，不引入额外退化。
-    moment = sign * Mmax;
-    tangent = 0.0;
+    // 极限转角后按输入刚度延伸；负刚度下降到零承载力后不再进入反向承载力。
+    const double postUltimateMoment = Mmax + postUltimateStiffness * (absoluteRotation - uu);
+    if (postUltimateMoment <= 0.0) {
+      moment = 0.0;
+      tangent = 0.0;
+    } else {
+      moment = sign * postUltimateMoment;
+      tangent = postUltimateStiffness;
+    }
   }
 }
 

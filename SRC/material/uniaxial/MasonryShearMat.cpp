@@ -412,7 +412,11 @@ void MasonryShearMat::backbone(double u, double &V, double &Et)
   } else {                        
     Et = (Vu - Vmax) / (uu - umax);   
     double Vpos = Vmax + Et * (std::abs(u) - umax);  
-    Vpos = Vpos < 0 ? 0 : Vpos;  // 防止负值
+    if (Vpos <= 0.0) {
+      // 负刚度段到达零承载力后保持为零，不能继续下降为反向承载力。
+      Vpos = 0.0;
+      Et = 0.0;
+    }
     V = u > 0 ? Vpos : -Vpos;  // 考虑 u 的符号
   }
 }

@@ -2,13 +2,14 @@
 // 文件: MasonryBendingMat.h
 // 功能: MasonryBendingMat 砌体弯曲单轴材料类声明
 // 用法: 脚本命令
-//       uniaxialMaterial MasonryBendingMat matTag? Ke? Mmax? <uu?> <R_My?> <CF?> <CD?> <gamma1?> <gamma2?>
+//       uniaxialMaterial MasonryBendingMat matTag? Ke? Mmax? <uu?> <R_My?> <CF?> <CD?> <gamma1?> <gamma2?> <postUltimateStiffness?>
 //       Ke: 弹性刚度; Mmax: 最大弯矩; uu: 极限弯曲角度(论文取0.008rad, 默认0.008)
 //       R_My: 屈服弯矩与Mmax的比值(论文取0.7)
 //       CF: 第一段卸载相对反转点弯矩的下降比例(论文取0.2)
 //       CD: 卸载第二折点相对屈服转角的水平位置参数(论文取0.1)
 //       gamma1: 极限转角处第一段卸载刚度与Ke之比
 //       gamma2: 第二段卸载路径斜率系数(论文取1.2，对应NextFEM的cC作用)
+//       postUltimateStiffness: 超过极限转角后的骨架刚度，默认0；负值使承载力线性下降至0后保持为0
 // 说明: 当前弯曲模型不包含剪切材料中的beta退化参数，不考虑强度或能量退化。
 //       实现见同目录 MasonryBendingMat.cpp
 // ============================================================================
@@ -23,8 +24,8 @@ class MasonryBendingMat : public UniaxialMaterial
 {
   public:
     // 构造函数
-    // tag: 材料标签; Ke Mmax 必选; uu~gamma2 可选(默认值见参数声明)
-    MasonryBendingMat(int tag, double Ke, double Mmax, double uu = 0.008, double R_My = 0.7, double CF = 0.2, double CD = 0.1, double gamma1 = 1.2, double gamma2 = 1.2);
+    // tag: 材料标签; Ke Mmax 必选; uu~postUltimateStiffness 可选(默认值见参数声明)
+    MasonryBendingMat(int tag, double Ke, double Mmax, double uu = 0.008, double R_My = 0.7, double CF = 0.2, double CD = 0.1, double gamma1 = 1.2, double gamma2 = 1.2, double postUltimateStiffness = 0.0);
     MasonryBendingMat();   // 默认构造(FEM_ObjectBroker 并行/数据库恢复时需要)
     ~MasonryBendingMat();  // 析构函数
 
@@ -66,6 +67,7 @@ class MasonryBendingMat : public UniaxialMaterial
     double CD;      // 第二折点相对屈服转角的水平位置参数
     double gamma1;  // 极限转角处第一段卸载刚度与Ke之比
     double gamma2;  // 第二段卸载路径斜率系数
+    double postUltimateStiffness;  // 超过极限转角后的骨架刚度，负刚度下降至零承载力后截断
 
     // ---- 分支状态机 ----
     enum Branch : int {
