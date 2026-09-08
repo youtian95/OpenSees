@@ -3,7 +3,7 @@
 // 功能: MasonryBendingMat 砌体弯曲单轴材料实现与 OPS 工厂函数
 // 使用流程: 工厂函数读取材料参数 -> 状态机判断骨架/卸载/再加载分支
 //           -> 计算弯矩和切线 -> commitState 提交历史
-// 输入: matTag, Ke, Mmax, uu 以及可选的 R_My、CF、CD、gamma1、gamma2、postUltimateStiffness
+// 输入: matTag, Ke, Mmax 以及可选的 umax、uu、R_My、CF、CD、gamma1、gamma2、postUltimateStiffness
 // 输出: OpenSees UniaxialMaterial，返回弯矩-转角关系
 // ============================================================================
 
@@ -30,10 +30,10 @@ void *OPS_MasonryBendingMat(void)
     numMasonryBendingMat = 1;
   }
 
-  // tag + Ke + Mmax 至少需要三个输入参数，uu 及其后的参数可省略。
+  // tag + Ke + Mmax 至少需要三个输入参数，umax 及其后的参数可省略。
   if (OPS_GetNumRemainingInputArgs() < 3) {
     opserr << "WARNING invalid args, want: uniaxialMaterial MasonryBendingMat "
-           << "tag? Ke? Mmax? <uu?> <R_My?> <CF?> <CD?> "
+           << "tag? Ke? Mmax? <umax?> <uu?> <R_My?> <CF?> <CD?> "
            << "<gamma1?> <gamma2?> <postUltimateStiffness?>\n";
     return 0;
   }
@@ -45,27 +45,19 @@ void *OPS_MasonryBendingMat(void)
     return 0;
   }
 
-  // 两个必选实数加七个可选实数，共九个实数参数。
-  double data[9];
+  // 两个必选实数加八个可选实数，共十个实数参数；省略的尾部参数采用默认值。
+  double data[10] = {0.0, 0.0, 0.004, 0.008, 0.7, 0.2, 0.1, 1.2, 1.2, 0.0};
   numData = OPS_GetNumRemainingInputArgs();
-  if (numData > 9)
-    numData = 9;
+  if (numData > 10) {
+    opserr << "WARNING too many MasonryBendingMat parameters" << endln;
+    return 0;
+  }
   if (OPS_GetDoubleInput(&numData, data) != 0) {
     opserr << "WARNING invalid MasonryBendingMat parameters" << endln;
     return 0;
   }
 
-  UniaxialMaterial *material = 0;
-  switch (numData) {
-    case 2: material = new MasonryBendingMat(tag, data[0], data[1]); break;
-    case 3: material = new MasonryBendingMat(tag, data[0], data[1], data[2]); break;
-    case 4: material = new MasonryBendingMat(tag, data[0], data[1], data[2], data[3]); break;
-    case 5: material = new MasonryBendingMat(tag, data[0], data[1], data[2], data[3], data[4]); break;
-    case 6: material = new MasonryBendingMat(tag, data[0], data[1], data[2], data[3], data[4], data[5]); break;
-    case 7: material = new MasonryBendingMat(tag, data[0], data[1], data[2], data[3], data[4], data[5], data[6]); break;
-    case 8: material = new MasonryBendingMat(tag, data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7]); break;
-    default: material = new MasonryBendingMat(tag, data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8]); break;
-  }
+  UniaxialMaterial *material = new MasonryBendingMat(tag, data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8], data[9]);
 
   if (material == 0) {
     opserr << "WARNING could not create MasonryBendingMat" << endln;
@@ -76,10 +68,10 @@ void *OPS_MasonryBendingMat(void)
 
 // 全参构造函数。
 MasonryBendingMat::MasonryBendingMat(
-    int tag, double _Ke, double _Mmax, double _uu, double _R_My,
+    int tag, double _Ke, double _Mmax, double _umax, double _uu, double _R_My,
     double _CF, double _CD, double _gamma1, double _gamma2, double _postUltimateStiffness)
   : UniaxialMaterial(tag, MAT_TAG_MasonryBendingMat),
-    Ke(_Ke), initialMmax(_Mmax), Mmax(_Mmax), committedMmax(_Mmax), uu(_uu), R_My(_R_My),
+    Ke(_Ke), initialMmax(_Mmax), Mmax(_Mmax), committedMmax(_Mmax), umax(_umax), uu(_uu), R_My(_R_My),
     CF(_CF), CD(_CD), gamma1(_gamma1), gamma2(_gamma2), postUltimateStiffness(_postUltimateStiffness),
     tState(), cState(), My(0.0), uy(0.0), Kp(0.0)
 {
@@ -91,7 +83,7 @@ MasonryBendingMat::MasonryBendingMat(
 // 默认构造函数：供 FEM_ObjectBroker 并行/数据库恢复使用。
 MasonryBendingMat::MasonryBendingMat()
   : UniaxialMaterial(0, MAT_TAG_MasonryBendingMat),
-    Ke(0.0), initialMmax(0.0), Mmax(0.0), committedMmax(0.0), uu(0.008), R_My(0.7),
+    Ke(0.0), initialMmax(0.0), Mmax(0.0), committedMmax(0.0), umax(0.004), uu(0.008), R_My(0.7),
     CF(0.2), CD(0.1), gamma1(1.2), gamma2(1.2), postUltimateStiffness(0.0),
     tState(), cState(), My(0.0), uy(0.0), Kp(0.0)
 {
@@ -203,8 +195,8 @@ UniaxialMaterial *MasonryBendingMat::getCopy(void)
 // 发送材料参数和完整已提交状态。
 int MasonryBendingMat::sendSelf(int commitTag, Channel &theChannel)
 {
-  // data(0)为材料tag，data(1..8)为原有参数，data(9..19)为骨架和状态，data(20)为极限转角后刚度。
-  static Vector data(21);
+  // data(0)为材料tag，data(1..20)为原有参数和状态，data(21)为最大弯矩对应转角。
+  static Vector data(22);
   data(0) = getTag();
   data(1) = Ke; data(2) = initialMmax; data(3) = uu; data(4) = R_My;
   data(5) = CF; data(6) = CD; data(7) = gamma1; data(8) = gamma2;
@@ -220,6 +212,7 @@ int MasonryBendingMat::sendSelf(int commitTag, Channel &theChannel)
   data(18) = cState.directUnloading3 ? 1.0 : 0.0;
   data(19) = cState.maxAbsStrain;
   data(20) = postUltimateStiffness;
+  data(21) = umax;
 
   int result = theChannel.sendVector(getDbTag(), commitTag, data);
   if (result < 0)
@@ -231,7 +224,7 @@ int MasonryBendingMat::sendSelf(int commitTag, Channel &theChannel)
 int MasonryBendingMat::recvSelf(
     int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker)
 {
-  static Vector data(21);
+  static Vector data(22);
   int result = theChannel.recvVector(getDbTag(), commitTag, data);
   if (result < 0) {
     opserr << "MasonryBendingMat::recvSelf() - failed to receive data\n";
@@ -243,7 +236,6 @@ int MasonryBendingMat::recvSelf(
   CF = data(5); CD = data(6); gamma1 = data(7); gamma2 = data(8);
   committedMmax = data(9);
   Mmax = committedMmax;
-  updateDerivedParameters();
 
   cState.strain = data(10);
   cState.strainRate = data(11);
@@ -256,6 +248,8 @@ int MasonryBendingMat::recvSelf(
   cState.directUnloading3 = data(18) != 0.0;
   cState.maxAbsStrain = data(19);
   postUltimateStiffness = data(20);
+  umax = data(21);
+  updateDerivedParameters();
   tState = cState;
   return 0;
 }
@@ -270,6 +264,7 @@ void MasonryBendingMat::Print(OPS_Stream &s, int flag)
     s << "\"type\": \"MasonryBendingMat\", ";
     s << "\"Ke\": " << Ke << ", ";
     s << "\"Mmax\": " << initialMmax << ", ";
+    s << "\"umax\": " << umax << ", ";
     s << "\"uu\": " << uu << ", ";
     s << "\"R_My\": " << R_My << ", ";
     s << "\"CF\": " << CF << ", ";
@@ -281,7 +276,7 @@ void MasonryBendingMat::Print(OPS_Stream &s, int flag)
   }
 
   s << "MasonryBendingMat tag: " << getTag() << endln;
-  s << "  Ke: " << Ke << " initialMmax: " << initialMmax << " committedMmax: " << committedMmax << " Mmax: " << Mmax << " uu: " << uu << endln;
+  s << "  Ke: " << Ke << " initialMmax: " << initialMmax << " committedMmax: " << committedMmax << " Mmax: " << Mmax << " umax: " << umax << " uu: " << uu << endln;
   s << "  My: " << My << " uy: " << uy << " Kp: " << Kp << endln;
   s << "  R_My: " << R_My << " CF: " << CF
     << " CD: " << CD << " gamma1: " << gamma1
@@ -295,21 +290,22 @@ void MasonryBendingMat::updateDerivedParameters()
 {
   My = R_My * Mmax;
   uy = Ke != 0.0 ? My / Ke : 0.0;
-  Kp = uu > uy ? (Mmax - My) / (uu - uy) : 0.0;
+  Kp = umax > uy ? (Mmax - My) / (umax - uy) : 0.0;
 }
 
 // 根据历史最大绝对转角计算第一段卸载刚度。
-// 屈服前保持Ke，屈服后线性退化，并在超过uu后继续沿同一斜率外推。
+// 屈服前保持Ke，屈服后按最大弯矩对应转角umax归一化，并在超过umax后继续沿同一斜率外推。
 double MasonryBendingMat::unloadingStiffness(const State &state) const
 {
   if (state.maxAbsStrain <= uy)
     return Ke;
 
-  const double ratio = (state.maxAbsStrain - uy) / (uu - uy);
+  // umax继承原uu在循环规则中的作用；新的uu只控制峰值平台终点，不能改变卸载与再加载路径。
+  const double ratio = (state.maxAbsStrain - uy) / (umax - uy);
   return Ke * (1.0 + (gamma1 - 1.0) * ratio);
 }
 
-// 计算无退化的双折线弯矩-转角骨架。
+// 计算弹性、强化、峰值平台和极限转角后分支组成的弯矩-转角骨架。
 void MasonryBendingMat::backbone(double rotation, double &moment, double &tangent)
 {
   const double absoluteRotation = std::abs(rotation);
@@ -318,9 +314,13 @@ void MasonryBendingMat::backbone(double rotation, double &moment, double &tangen
   if (absoluteRotation <= uy) {
     moment = Ke * rotation;
     tangent = Ke;
-  } else if (absoluteRotation <= uu) {
+  } else if (absoluteRotation <= umax) {
     moment = sign * (My + Kp * (absoluteRotation - uy));
     tangent = Kp;
+  } else if (absoluteRotation <= uu) {
+    // 达到最大弯矩后保持平台，直到极限转角。
+    moment = sign * Mmax;
+    tangent = 0.0;
   } else {
     // 极限转角后按输入刚度延伸；负刚度下降到零承载力后不再进入反向承载力。
     const double postUltimateMoment = Mmax + postUltimateStiffness * (absoluteRotation - uu);
