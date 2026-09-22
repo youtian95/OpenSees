@@ -133,6 +133,9 @@ private:
     // 根据未锁定状态下的收敛弹簧变形，选择首先越过屈服点的控制弹簧。
     int selectTrialFailureMode(void);
 
+    // 检查任一横向弹簧的试算骨架是否已降至零承载力。
+    bool hasTrialLateralFailure(void) const;
+
     // 使用普通 Newton 法求解内部剪切变形。
     // thetaI: I 端相对于单元弦的基本试算转角，逆时针为正。
     // thetaJ: J 端相对于单元弦的基本试算转角，逆时针为正。
@@ -180,6 +183,10 @@ private:
     bool useExclusiveFailureMode;
     int committedFailureMode;
     int trialFailureMode;
+
+    // 横向失效后不再求解无根的内部平衡方程，但仍保留轴向弹簧。
+    bool committedLateralFailure;
+    bool trialLateralFailure;
 
     // 以下对象作为 OpenSees const 引用返回值的持久缓存。
     Matrix tangentStiffness;

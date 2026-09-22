@@ -202,7 +202,7 @@ void *OPS_MasonryMacro2D(void)
 }
 
 MasonryMacro2D::MasonryMacro2D(int tag, int nodeI, int nodeJ, UniaxialMaterial &bendingMaterial, UniaxialMaterial &shearMaterialInput, UniaxialMaterial &axialMaterialInput, CrdTransf &coordinateTransformation, double widthInput, double thicknessInput, double compressiveStrengthInput, double cohesionInput, double diagonalTensileStrengthInput, double stressBlockCoefficientInput, double frictionCoefficientInput, int maximumIterationsInput, double relativeToleranceInput, bool useDisplacementConvergenceInput, bool useExclusiveFailureModeInput, double printModelWidthInput, double printModelThicknessInput)
-    : Element(tag, ELE_TAG_MasonryMacro2D), connectedExternalNodes(2), theCoordTransf(coordinateTransformation.getCopy2d()), shearMaterial(shearMaterialInput.getCopy()), axialMaterial(axialMaterialInput.getCopy()), width(widthInput), thickness(thicknessInput), compressiveStrength(compressiveStrengthInput), cohesion(cohesionInput), diagonalTensileStrength(diagonalTensileStrengthInput), stressBlockCoefficient(stressBlockCoefficientInput), frictionCoefficient(frictionCoefficientInput), printModelWidth(printModelWidthInput), printModelThickness(printModelThicknessInput), committedContraflexureDistance(0.0), maximumIterations(maximumIterationsInput), relativeTolerance(relativeToleranceInput), useDisplacementConvergence(useDisplacementConvergenceInput), useExclusiveFailureMode(useExclusiveFailureModeInput), committedFailureMode(0), trialFailureMode(0), tangentStiffness(6, 6), initialStiffness(6, 6), resistingForce(6)
+    : Element(tag, ELE_TAG_MasonryMacro2D), connectedExternalNodes(2), theCoordTransf(coordinateTransformation.getCopy2d()), shearMaterial(shearMaterialInput.getCopy()), axialMaterial(axialMaterialInput.getCopy()), width(widthInput), thickness(thicknessInput), compressiveStrength(compressiveStrengthInput), cohesion(cohesionInput), diagonalTensileStrength(diagonalTensileStrengthInput), stressBlockCoefficient(stressBlockCoefficientInput), frictionCoefficient(frictionCoefficientInput), printModelWidth(printModelWidthInput), printModelThickness(printModelThicknessInput), committedContraflexureDistance(0.0), maximumIterations(maximumIterationsInput), relativeTolerance(relativeToleranceInput), useDisplacementConvergence(useDisplacementConvergenceInput), useExclusiveFailureMode(useExclusiveFailureModeInput), committedFailureMode(0), trialFailureMode(0), committedLateralFailure(false), trialLateralFailure(false), tangentStiffness(6, 6), initialStiffness(6, 6), resistingForce(6)
 {
     connectedExternalNodes(0) = nodeI;
     connectedExternalNodes(1) = nodeJ;
@@ -213,7 +213,7 @@ MasonryMacro2D::MasonryMacro2D(int tag, int nodeI, int nodeJ, UniaxialMaterial &
 }
 
 MasonryMacro2D::MasonryMacro2D()
-    : Element(0, ELE_TAG_MasonryMacro2D), connectedExternalNodes(2), theCoordTransf(0), shearMaterial(0), axialMaterial(0), width(0.0), thickness(0.0), compressiveStrength(0.0), cohesion(0.0), diagonalTensileStrength(0.0), stressBlockCoefficient(0.85), frictionCoefficient(0.4), printModelWidth(-1.0), printModelThickness(-1.0), committedContraflexureDistance(0.0), maximumIterations(50), relativeTolerance(1.0e-8), useDisplacementConvergence(true), useExclusiveFailureMode(false), committedFailureMode(0), trialFailureMode(0), tangentStiffness(6, 6), initialStiffness(6, 6), resistingForce(6)
+    : Element(0, ELE_TAG_MasonryMacro2D), connectedExternalNodes(2), theCoordTransf(0), shearMaterial(0), axialMaterial(0), width(0.0), thickness(0.0), compressiveStrength(0.0), cohesion(0.0), diagonalTensileStrength(0.0), stressBlockCoefficient(0.85), frictionCoefficient(0.4), printModelWidth(-1.0), printModelThickness(-1.0), committedContraflexureDistance(0.0), maximumIterations(50), relativeTolerance(1.0e-8), useDisplacementConvergence(true), useExclusiveFailureMode(false), committedFailureMode(0), trialFailureMode(0), committedLateralFailure(false), trialLateralFailure(false), tangentStiffness(6, 6), initialStiffness(6, 6), resistingForce(6)
 {
     theNodes[0] = 0;
     theNodes[1] = 0;
@@ -286,8 +286,8 @@ void MasonryMacro2D::setDomain(Domain *theDomain)
 
 int MasonryMacro2D::commitState(void)
 {
-    const double momentI = bendingMaterials[0]->getStress();
-    const double momentJ = bendingMaterials[1]->getStress();
+    const double momentI = trialLateralFailure ? 0.0 : bendingMaterials[0]->getStress();
+    const double momentJ = trialLateralFailure ? 0.0 : bendingMaterials[1]->getStress();
     const double momentSum = momentI + momentJ;
     const double V = std::abs(momentSum / theCoordTransf->getInitialLength());
     double trialContraflexureDistance = committedContraflexureDistance;
@@ -303,6 +303,7 @@ int MasonryMacro2D::commitState(void)
     if (result == 0) {
         committedContraflexureDistance = trialContraflexureDistance;
         committedFailureMode = trialFailureMode;
+        committedLateralFailure = trialLateralFailure;
     }
     return result;
 }
@@ -315,6 +316,7 @@ int MasonryMacro2D::revertToLastCommit(void)
     result += shearMaterial->revertToLastCommit();
     result += axialMaterial->revertToLastCommit();
     trialFailureMode = committedFailureMode;
+    trialLateralFailure = committedLateralFailure;
     return result;
 }
 
@@ -328,6 +330,8 @@ int MasonryMacro2D::revertToStart(void)
     committedContraflexureDistance = theCoordTransf->getInitialLength() / 2.0;
     committedFailureMode = 0;
     trialFailureMode = 0;
+    committedLateralFailure = false;
+    trialLateralFailure = false;
     resistingForce.Zero();
     return result;
 }
@@ -375,8 +379,13 @@ int MasonryMacro2D::update(void)
     }
 
     trialFailureMode = committedFailureMode;
+    trialLateralFailure = committedLateralFailure;
+    // 任一横向弹簧已降至零承载力后，只更新轴向材料，不再求解已无物理意义的内部平衡。
+    if (committedLateralFailure) {
+        return 0;
+    }
     result = this->solveInternalShearDeformation(eleTrialDeformation(1), eleTrialDeformation(2), axialMaterial->getStress());
-    if (result != 0 || !useExclusiveFailureMode || committedFailureMode != 0) {
+    if (result != 0 || trialLateralFailure || !useExclusiveFailureMode || committedFailureMode != 0) {
         return result;
     }
 
@@ -506,6 +515,19 @@ int MasonryMacro2D::selectTrialFailureMode(void)
     return 0;
 }
 
+bool MasonryMacro2D::hasTrialLateralFailure(void) const
+{
+    UniaxialMaterial *materials[3] = {bendingMaterials[0], bendingMaterials[1], shearMaterial};
+    for (int index = 0; index < 3; ++index) {
+        const MasonryBendingMat *bending = dynamic_cast<const MasonryBendingMat *>(materials[index]);
+        const MasonryShearMat *shear = dynamic_cast<const MasonryShearMat *>(materials[index]);
+        if ((bending != 0 && bending->isFailed()) || (shear != 0 && shear->isFailed())) {
+            return true;
+        }
+    }
+    return false;
+}
+
 int MasonryMacro2D::solveInternalShearDeformationByNewton(double thetaI, double thetaJ, double axialForce, double initialShearDeformation)
 {
     const double length = theCoordTransf->getInitialLength();
@@ -516,6 +538,11 @@ int MasonryMacro2D::solveInternalShearDeformationByNewton(double thetaI, double 
         const int result = this->evaluateInternalShearResidual(thetaI, thetaJ, axialForce, shearDeformation, residual, residualScale);
         if (result != 0) {
             return result;
+        }
+        // 零承载力表示横向机制已失效；此后局部平衡方程可能无根，直接交由单元失效状态处理。
+        if (this->hasTrialLateralFailure()) {
+            trialLateralFailure = true;
+            return 0;
         }
         if (!useDisplacementConvergence && std::abs(residual) <= relativeTolerance * residualScale) {
             return 0;
@@ -673,6 +700,25 @@ const Matrix &MasonryMacro2D::getTangentStiff(void)
     Matrix basicStiffness(3, 3);
     basicStiffness.Zero();
 
+    if (trialLateralFailure) {
+        // 轴向仍正常工作；横向仅保留初始转动刚度的 1e-8 作为数值正则项，恢复力仍严格为零。
+        const double tangentI = bendingMaterials[0]->getInitialTangent();
+        const double tangentJ = bendingMaterials[1]->getInitialTangent();
+        const double shearTangent = shearMaterial->getInitialTangent();
+        const double length = theCoordTransf->getInitialLength();
+        const double denominator = tangentI + tangentJ + shearTangent * length * length;
+        basicStiffness(0, 0) = axialMaterial->getTangent();
+        basicStiffness(1, 1) = 1.0e-8 * tangentI * (1.0 - tangentI / denominator);
+        basicStiffness(1, 2) = -1.0e-8 * tangentI * tangentJ / denominator;
+        basicStiffness(2, 1) = basicStiffness(1, 2);
+        basicStiffness(2, 2) = 1.0e-8 * tangentJ * (1.0 - tangentJ / denominator);
+        Vector basicForce(3);
+        basicForce.Zero();
+        basicForce(0) = axialMaterial->getStress();
+        tangentStiffness = theCoordTransf->getGlobalStiffMatrix(basicStiffness, basicForce);
+        return tangentStiffness;
+    }
+
     // 材料骨架对轴力的依赖仍采用冻结当前轴力的近似，但保留新平衡方程引起的轴向—弯矩耦合。
     const double Mj_prime = bendingMaterials[1]->getTangent();
     const double Mi_prime = bendingMaterials[0]->getTangent();
@@ -756,13 +802,13 @@ const Vector &MasonryMacro2D::getResistingForce(void)
 {
     // N 为轴向弹簧力，单元轴向基本力还包含剪力沿单元轴线的投影 V*Delta/L。
     double axialForce = axialMaterial->getStress();
-    double shearForce = shearMaterial->getStress();
+    double shearForce = trialLateralFailure ? 0.0 : shearMaterial->getStress();
     double shearDeformation = shearMaterial->getStrain();
     double length = theCoordTransf->getInitialLength();
     // Mi
-    double momentI = bendingMaterials[0]->getStress();
+    double momentI = trialLateralFailure ? 0.0 : bendingMaterials[0]->getStress();
     // Mj
-    double momentJ = bendingMaterials[1]->getStress();
+    double momentJ = trialLateralFailure ? 0.0 : bendingMaterials[1]->getStress();
 
     Vector basicForce(3);
     basicForce (0) = axialForce + shearForce * shearDeformation / length;
@@ -801,7 +847,7 @@ int MasonryMacro2D::sendSelf(int commitTag, Channel &theChannel)
         idData(6 + 2 * i) = ensureMaterialDbTag(materials[i], theChannel);
     }
 
-    Vector vectorData(19);
+    Vector vectorData(20);
     vectorData(0) = alphaM;
     vectorData(1) = betaK;
     vectorData(2) = betaK0;
@@ -821,6 +867,7 @@ int MasonryMacro2D::sendSelf(int commitTag, Channel &theChannel)
     vectorData(16) = committedFailureMode;
     vectorData(17) = printModelWidth;
     vectorData(18) = printModelThickness;
+    vectorData(19) = committedLateralFailure ? 1.0 : 0.0;
 
     if (theChannel.sendID(dataTag, commitTag, idData) < 0 || theChannel.sendVector(dataTag, commitTag, vectorData) < 0 || theCoordTransf->sendSelf(commitTag, theChannel) < 0) {
         return -1;
@@ -838,7 +885,7 @@ int MasonryMacro2D::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroke
 {
     int dataTag = this->getDbTag();
     ID idData(13);
-    Vector vectorData(19);
+    Vector vectorData(20);
     if (theChannel.recvID(dataTag, commitTag, idData) < 0 || theChannel.recvVector(dataTag, commitTag, vectorData) < 0) {
         return -1;
     }
@@ -866,6 +913,8 @@ int MasonryMacro2D::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroke
     trialFailureMode = committedFailureMode;
     printModelWidth = vectorData(17);
     printModelThickness = vectorData(18);
+    committedLateralFailure = vectorData(19) != 0.0;
+    trialLateralFailure = committedLateralFailure;
     if (theCoordTransf == 0 || theCoordTransf->getClassTag() != idData(3)) {
         delete theCoordTransf;
         theCoordTransf = theBroker.getNewCrdTransf(idData(3));

@@ -41,6 +41,7 @@ class MasonryBendingMat : public UniaxialMaterial
     double getTangent(void);         // 返回当前试切线刚度
     double getInitialTangent(void);  // 返回初始刚度(Ke)
     double getYieldStrain(void) const; // 返回当前骨架的屈服转角。
+    bool isFailed(void) const;       // 返回试算状态是否已永久失效。
 
     // 设置当前试算轴力对应的弯曲骨架峰值；Mmax: 当前试算最大弯矩
     int setTrialBackbone(double Mmax);
@@ -93,6 +94,7 @@ class MasonryBendingMat : public UniaxialMaterial
       double revStress = 0.0;             // 反转点A的弯矩
       double maxAbsStrain = 0.0;          // 已达到的历史最大绝对转角
       bool directUnloading3 = false;      // 是否从再加载直接进入第三段
+      bool failed = false;                // 骨架承载力降至零后永久退出工作
     };
 
     State tState;                         // 试状态
@@ -106,14 +108,18 @@ class MasonryBendingMat : public UniaxialMaterial
     // ---- 辅助函数 ----
     // 根据当前试算最大弯矩重算屈服弯矩、屈服转角和屈服后刚度
     void updateDerivedParameters();
-    // 根据历史最大绝对转角计算第一段卸载刚度，超过最大弯矩对应转角后继续线性退化。
+    // 根据历史最大绝对转角计算第一段卸载刚度，超过最大弯矩对应转角后保持gamma1*Ke。
     // state: 保存历史最大绝对转角的材料状态。
     double unloadingStiffness(const State &state) const;
+    // 判断当前转角是否已使峰后骨架承载力降至零。
+    bool hasReachedFailure(double rotation) const;
     void backbone(double rotation, double &moment, double &tangent);
     State initialState() const;
     // 根据反转点弯矩方向计算第三段卸载的反向屈服转角。
     // state: 当前卸载状态，包含反转点弯矩和加载方向。
     double unloadingTargetStrain(const State &state) const;
+    // 计算包含峰值平台塑性位移平移量的第二卸载折点转角。
+    double unloadingSecondPointStrain(const State &state) const;
     void computeUnloadingPoints(
         const State &state, double &unload1Strain, double &unload1Stress,
         double &unload2Strain, double &unload2Stress);

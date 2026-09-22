@@ -41,6 +41,7 @@ class MasonryShearMat : public UniaxialMaterial
     double getTangent(void);         // 返回当前试切线刚度
     double getInitialTangent(void);  // 返回初始刚度(Ke)
     double getYieldStrain(void) const; // 返回当前骨架的屈服位移。
+    bool isFailed(void) const;       // 返回试算状态是否已永久失效。
 
     // 设置当前试算轴力对应的剪切骨架峰值；Vmax: 当前试算最大剪切力
     int setTrialBackbone(double Vmax);
@@ -108,6 +109,7 @@ class MasonryShearMat : public UniaxialMaterial
         double cycleStartStress = 0.0;  // 当前耗能回路起点剪力
         double cycleStartDir = 0.0;     // 当前耗能回路是否激活及其起点方向
         double cycleWork = 0.0;         // 从回路起点至当前状态的有符号外力功
+        bool failed = false;            // 骨架承载力降至零后永久退出工作
     };
 
     State tState;    // 试状态(当前迭代步)
@@ -118,6 +120,8 @@ class MasonryShearMat : public UniaxialMaterial
     void updateDerivedParameters();
     // 骨架曲线计算函数
     void backbone(double u, double &V, double &Et);
+    // 判断当前位移是否已使峰后骨架承载力降至零。
+    bool hasReachedFailure(double strain) const;
     // 计算射线与骨架曲线的交点
     void intersectionWithBackbone(double Strain, double Stress, double Tangent, double StrainDir, double &tgtStrain, double &tgtStress);
     // 计算卸载段1的刚度

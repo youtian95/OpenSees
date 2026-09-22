@@ -103,6 +103,15 @@ int MasonryBendingMat::setTrialStrain(double strain, double strainRate)
   tState.strainRate = strainRate;
   tState.maxAbsStrain = std::max(cState.maxAbsStrain, std::abs(strain));
 
+  // 骨架承载力降至零后永久退出工作；保留极小数值切线，避免零刚度自由度使全局矩阵奇异。
+  if (cState.failed || hasReachedFailure(strain)) {
+    tState.failed = true;
+    tState.stress = 0.0;
+    // 失效后恢复力严格为零，同时保留 MinMax 同量级的微小数值刚度，避免整体刚度矩阵奇异。
+    tState.tangent = 1.0e-8 * Ke;
+    return 0;
+  }
+
   // 根据当前试转角相对已提交转角的增量确定加载方向。
   const double du = tState.strain - cState.strain;
   if (du > 1.0e-14)
@@ -134,6 +143,13 @@ int MasonryBendingMat::setTrialLinearStrain(double strain, double strainRate)
   tState = cState;
   tState.strain = strain;
   tState.strainRate = strainRate;
+  if (cState.failed || hasReachedFailure(strain)) {
+    tState.failed = true;
+    tState.stress = 0.0;
+    // 失效后恢复力严格为零，同时保留 MinMax 同量级的微小数值刚度，避免整体刚度矩阵奇异。
+    tState.tangent = 1.0e-8 * Ke;
+    return 0;
+  }
   tState.stress = Ke * strain;
   tState.tangent = Ke;
   tState.branch = ELASTIC;
@@ -146,6 +162,8 @@ double MasonryBendingMat::getTangent(void) { return tState.tangent; }
 double MasonryBendingMat::getInitialTangent(void) { return Ke; }
 
 double MasonryBendingMat::getYieldStrain(void) const { return uy; }
+
+bool MasonryBendingMat::isFailed(void) const { return tState.failed; }
 
 // 设置当前试算轴力对应的弯曲骨架峰值。
 // Mmax: 当前试算最大弯矩；应在本次 setTrialStrain() 之前调用。
@@ -195,8 +213,8 @@ UniaxialMaterial *MasonryBendingMat::getCopy(void)
 // 发送材料参数和完整已提交状态。
 int MasonryBendingMat::sendSelf(int commitTag, Channel &theChannel)
 {
-  // data(0)为材料tag，data(1..20)为原有参数和状态，data(21)为最大弯矩对应转角。
-  static Vector data(22);
+  // data(0)为材料tag，data(1..21)为原有参数和状态，data(22)为永久失效标志。
+  static Vector data(23);
   data(0) = getTag();
   data(1) = Ke; data(2) = initialMmax; data(3) = uu; data(4) = R_My;
   data(5) = CF; data(6) = CD; data(7) = gamma1; data(8) = gamma2;
@@ -213,6 +231,7 @@ int MasonryBendingMat::sendSelf(int commitTag, Channel &theChannel)
   data(19) = cState.maxAbsStrain;
   data(20) = postUltimateStiffness;
   data(21) = umax;
+  data(22) = cState.failed ? 1.0 : 0.0;
 
   int result = theChannel.sendVector(getDbTag(), commitTag, data);
   if (result < 0)
@@ -224,7 +243,7 @@ int MasonryBendingMat::sendSelf(int commitTag, Channel &theChannel)
 int MasonryBendingMat::recvSelf(
     int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker)
 {
-  static Vector data(22);
+  static Vector data(23);
   int result = theChannel.recvVector(getDbTag(), commitTag, data);
   if (result < 0) {
     opserr << "MasonryBendingMat::recvSelf() - failed to receive data\n";
@@ -249,6 +268,7 @@ int MasonryBendingMat::recvSelf(
   cState.maxAbsStrain = data(19);
   postUltimateStiffness = data(20);
   umax = data(21);
+  cState.failed = data(22) != 0.0;
   updateDerivedParameters();
   tState = cState;
   return 0;
@@ -281,8 +301,8 @@ void MasonryBendingMat::Print(OPS_Stream &s, int flag)
   s << "  R_My: " << R_My << " CF: " << CF
     << " CD: " << CD << " gamma1: " << gamma1
     << " gamma2: " << gamma2 << " postUltimateStiffness: " << postUltimateStiffness << endln;
-  s << "  trial: strain=" << tState.strain << " stress=" << tState.stress << " tangent=" << tState.tangent << " branch=" << static_cast<int>(tState.branch) << " direction=" << tState.ldir << endln;
-  s << "  committed: strain=" << cState.strain << " stress=" << cState.stress << " tangent=" << cState.tangent << " branch=" << static_cast<int>(cState.branch) << " direction=" << cState.ldir << " maxAbsStrain=" << cState.maxAbsStrain << endln;
+  s << "  trial: strain=" << tState.strain << " stress=" << tState.stress << " tangent=" << tState.tangent << " branch=" << static_cast<int>(tState.branch) << " direction=" << tState.ldir << " failed=" << tState.failed << endln;
+  s << "  committed: strain=" << cState.strain << " stress=" << cState.stress << " tangent=" << cState.tangent << " branch=" << static_cast<int>(cState.branch) << " direction=" << cState.ldir << " maxAbsStrain=" << cState.maxAbsStrain << " failed=" << cState.failed << endln;
 }
 
 // 根据当前试算最大弯矩更新所有依赖骨架峰值的派生参数。
@@ -294,15 +314,25 @@ void MasonryBendingMat::updateDerivedParameters()
 }
 
 // 根据历史最大绝对转角计算第一段卸载刚度。
-// 屈服前保持Ke，屈服后按最大弯矩对应转角umax归一化，并在超过umax后继续沿同一斜率外推。
+// 屈服前保持Ke，屈服后按最大弯矩对应转角umax归一化，超过umax后保持gamma1*Ke。
 double MasonryBendingMat::unloadingStiffness(const State &state) const
 {
   if (state.maxAbsStrain <= uy)
     return Ke;
 
-  // umax继承原uu在循环规则中的作用；新的uu只控制峰值平台终点，不能改变卸载与再加载路径。
-  const double ratio = (state.maxAbsStrain - uy) / (umax - uy);
+  // 插值参数限制在0至1，避免极端转角使卸载刚度外推为负值。
+  const double denominator = umax - uy;
+  const double rawRatio = denominator > 1.0e-14 ? (state.maxAbsStrain - uy) / denominator : 1.0;
+  const double ratio = std::max(0.0, std::min(rawRatio, 1.0));
   return Ke * (1.0 + (gamma1 - 1.0) * ratio);
+}
+
+// 仅当负峰后刚度使骨架承载力真正降至零时触发永久失效。
+bool MasonryBendingMat::hasReachedFailure(double rotation) const
+{
+  if (postUltimateStiffness >= 0.0 || std::abs(rotation) <= uu)
+    return false;
+  return Mmax + postUltimateStiffness * (std::abs(rotation) - uu) <= 0.0;
 }
 
 // 计算弹性、强化、峰值平台和极限转角后分支组成的弯矩-转角骨架。
@@ -356,8 +386,7 @@ void MasonryBendingMat::computeUnloadingPoints(const State &state, double &unloa
   unload1Strain = state.revStrain + (unload1Stress - state.revStress) / safeK1;
 
   // CD控制第二折点B相对屈服转角的水平位置，B点弯矩由第二段直线连续计算。
-  const double side = state.revStress >= 0.0 ? 1.0 : -1.0;
-  unload2Strain = side * (1.0 + CD) * uy;
+  unload2Strain = unloadingSecondPointStrain(state);
   unload2Stress = unload1Stress + safeK2 * (unload2Strain - unload1Strain);
 }
 
@@ -377,6 +406,14 @@ double MasonryBendingMat::unloadingTargetStrain(const State &state) const
 
   // 反转点弯矩接近零时，使用当前加载方向作为退化情形下的后备判断。
   return state.ldir > 0.0 ? uy : -uy;
+}
+
+// 峰值平台上的额外转角视为塑性平移量，避免极端反转点与固定B点之间形成不合理的超长卸载段。
+double MasonryBendingMat::unloadingSecondPointStrain(const State &state) const
+{
+  const double side = state.revStress >= 0.0 ? 1.0 : -1.0;
+  const double plasticShift = side * std::max(std::abs(state.revStrain) - umax, 0.0);
+  return side * (1.0 + CD) * uy + plasticShift;
 }
 
 // 按A-B-C-反向屈服点的三段折线计算卸载路径。
@@ -444,8 +481,7 @@ bool MasonryBendingMat::checkTransitions()
     const double assumedStress = cState.stress + cState.tangent * du;
     const double direction = tState.ldir > 0.0 ? 1.0 : -1.0;
     const double unload1Stress = (1.0 - CF) * cState.revStress;
-    const double side = cState.revStress >= 0.0 ? 1.0 : -1.0;
-    const double unload2Strain = side * (1.0 + CD) * uy;
+    const double unload2Strain = unloadingSecondPointStrain(cState);
 
     // 只要当前位移已经越过B点，就直接进入第三段，不再经过第二段。
     if ((tState.strain - unload2Strain) * direction > 0.0) {
@@ -466,8 +502,7 @@ bool MasonryBendingMat::checkTransitions()
       return true;
     }
     const double direction = tState.ldir > 0.0 ? 1.0 : -1.0;
-    const double side = cState.revStress >= 0.0 ? 1.0 : -1.0;
-    const double unload2Strain = side * (1.0 + CD) * uy;
+    const double unload2Strain = unloadingSecondPointStrain(cState);
     if ((tState.strain - unload2Strain) * direction > 0.0) {
       tState.branch = UNLOADING_3;
       return true;
@@ -493,7 +528,7 @@ bool MasonryBendingMat::checkTransitions()
     if (tState.ldir * cState.ldir < 0.0) {
       // 只有反转点已经超过上一加载侧的B点，才重新经历三段卸载；
       // 尚未达到B点时，直接连接到反向屈服点。
-      const double bStrain = cState.ldir * (1.0 + CD) * uy;
+      const double bStrain = unloadingSecondPointStrain(cState);
       if ((cState.strain - bStrain) * cState.ldir > 0.0) {
         tState.branch = UNLOADING_1;
       } else {

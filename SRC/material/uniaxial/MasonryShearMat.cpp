@@ -136,6 +136,14 @@ MasonryShearMat::setTrialStrain(double strain, double strainRate)
   tState = cState;
   tState.strain = strain;
   tState.strainRate = strainRate;
+  // 骨架承载力降至零后永久退出工作；保留极小数值切线，避免零刚度自由度使全局矩阵奇异。
+  if (cState.failed || hasReachedFailure(strain)) {
+    tState.failed = true;
+    tState.stress = 0.0;
+    // 失效后恢复力严格为零，同时保留 MinMax 同量级的微小数值刚度，避免整体刚度矩阵奇异。
+    tState.tangent = 1.0e-8 * Ke;
+    return 0;
+  }
   if (symmetricMaxHistory) {
     const double maximumAbsoluteStrain = std::max(std::max(cState.umaxPos, -cState.umaxNeg), std::abs(strain));
     tState.umaxPos = maximumAbsoluteStrain;
@@ -179,6 +187,13 @@ int MasonryShearMat::setTrialLinearStrain(double strain, double strainRate)
   tState = cState;
   tState.strain = strain;
   tState.strainRate = strainRate;
+  if (cState.failed || hasReachedFailure(strain)) {
+    tState.failed = true;
+    tState.stress = 0.0;
+    // 失效后恢复力严格为零，同时保留 MinMax 同量级的微小数值刚度，避免整体刚度矩阵奇异。
+    tState.tangent = 1.0e-8 * Ke;
+    return 0;
+  }
   tState.stress = Ke * strain;
   tState.tangent = Ke;
   tState.branch = ELASTIC;
@@ -192,6 +207,8 @@ double MasonryShearMat::getTangent(void)        { return tState.tangent; }
 double MasonryShearMat::getInitialTangent(void) { return Ke; }
 
 double MasonryShearMat::getYieldStrain(void) const { return uy; }
+
+bool MasonryShearMat::isFailed(void) const { return tState.failed; }
 
 // 设置当前试算轴力对应的剪切骨架峰值。
 // Vmax: 当前试算最大剪切力；应在本次 setTrialStrain() 之前调用。
@@ -248,8 +265,8 @@ MasonryShearMat::getCopy(void)
 int
 MasonryShearMat::sendSelf(int commitTag, Channel &theChannel)
 {
-  // 打包布局: data(0)=材料tag; data(1..9)=材料参数; data(10)=已提交骨架峰值; data(11..26)=已提交状态; data(27)=对称历史开关
-  static Vector data(28);
+  // 打包布局: data(0)=材料tag; data(1..9)=材料参数; data(10)=已提交骨架峰值; data(11..26)=已提交状态; data(27)=对称历史开关; data(28)=永久失效标志
+  static Vector data(29);
   data(0) = this->getTag();
   // 材料参数
   data(1) = Ke;     data(2) = initialVmax;   data(3) = uu;
@@ -274,6 +291,7 @@ MasonryShearMat::sendSelf(int commitTag, Channel &theChannel)
   data(25) = cState.cycleStartDir;
   data(26) = cState.cycleWork;
   data(27) = symmetricMaxHistory ? 1.0 : 0.0;
+  data(28) = cState.failed ? 1.0 : 0.0;
 
   int res = theChannel.sendVector(this->getDbTag(), commitTag, data);
   if (res < 0)
@@ -285,7 +303,7 @@ MasonryShearMat::sendSelf(int commitTag, Channel &theChannel)
 int
 MasonryShearMat::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker)
 {
-  static Vector data(28);
+  static Vector data(29);
   int res = theChannel.recvVector(this->getDbTag(), commitTag, data);
   if (res < 0) {
     opserr << "MasonryShearMat::recvSelf() - failed to receive data\n";
@@ -318,6 +336,7 @@ MasonryShearMat::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &
   cState.cycleStartDir = data(25);
   cState.cycleWork = data(26);
   symmetricMaxHistory = data(27) != 0.0;
+  cState.failed = data(28) != 0.0;
   // 用已提交状态初始化试状态
   tState = cState;
   return 0;
@@ -350,8 +369,8 @@ MasonryShearMat::Print(OPS_Stream &s, int flag)
   s << "  Ke: " << Ke << " initialVmax: " << initialVmax << " committedVmax: " << committedVmax << " Vmax: " << Vmax << " uu: " << uu << endln;
   s << "  R_Vy: " << R_Vy << " R_Vu: " << R_Vu << " R_umax: " << R_umax
     << " alpha: " << alpha << " gamma: " << gamma << " beta: " << beta << " symmetricMaxHistory: " << symmetricMaxHistory << endln;
-  s << "  trial: strain=" << tState.strain << " stress=" << tState.stress << " tangent=" << tState.tangent << " branch=" << static_cast<int>(tState.branch) << " direction=" << tState.ldir << endln;
-  s << "  committed: strain=" << cState.strain << " stress=" << cState.stress << " tangent=" << cState.tangent << " branch=" << static_cast<int>(cState.branch) << " direction=" << cState.ldir << endln;
+  s << "  trial: strain=" << tState.strain << " stress=" << tState.stress << " tangent=" << tState.tangent << " branch=" << static_cast<int>(tState.branch) << " direction=" << tState.ldir << " failed=" << tState.failed << endln;
+  s << "  committed: strain=" << cState.strain << " stress=" << cState.stress << " tangent=" << cState.tangent << " branch=" << static_cast<int>(cState.branch) << " direction=" << cState.ldir << " failed=" << cState.failed << endln;
   s << "  history: revStrain=" << cState.revStrain << " revStress=" << cState.revStress << " targetStrain=" << cState.tgtStrain << " targetStress=" << cState.tgtStress << " umaxPos=" << cState.umaxPos << " umaxNeg=" << cState.umaxNeg << endln;
 }
 
@@ -359,9 +378,9 @@ MasonryShearMat::Print(OPS_Stream &s, int flag)
 Response *MasonryShearMat::setResponse(const char **argv, int argc, OPS_Stream &output)
 {
   if (argc > 0 && std::strcmp(argv[0], "diagnostics") == 0) {
-    static const char *labels[] = {"Vmax", "committedVmax", "Vy", "uy", "branch", "strain", "stress", "tangent", "targetStrain", "targetStress", "reversalStrain", "reversalStress", "loadingDirection"};
+    static const char *labels[] = {"Vmax", "committedVmax", "Vy", "uy", "branch", "strain", "stress", "tangent", "targetStrain", "targetStress", "reversalStrain", "reversalStress", "loadingDirection", "failed"};
     for (const char *label : labels) output.tag("ResponseType", label);
-    return new MaterialResponse(this, 100, Vector(13));
+    return new MaterialResponse(this, 100, Vector(14));
   }
   return UniaxialMaterial::setResponse(argv, argc, output);
 }
@@ -370,7 +389,7 @@ Response *MasonryShearMat::setResponse(const char **argv, int argc, OPS_Stream &
 int MasonryShearMat::getResponse(int responseID, Information &information)
 {
   if (responseID != 100) return UniaxialMaterial::getResponse(responseID, information);
-  static Vector diagnostics(13);
+  static Vector diagnostics(14);
   diagnostics(0) = Vmax;
   diagnostics(1) = committedVmax;
   diagnostics(2) = Vy;
@@ -384,6 +403,7 @@ int MasonryShearMat::getResponse(int responseID, Information &information)
   diagnostics(10) = tState.revStrain;
   diagnostics(11) = tState.revStress;
   diagnostics(12) = tState.ldir;
+  diagnostics(13) = tState.failed ? 1.0 : 0.0;
   return information.setVector(diagnostics);
 }
 
@@ -419,6 +439,17 @@ void MasonryShearMat::backbone(double u, double &V, double &Et)
     }
     V = u > 0 ? Vpos : -Vpos;  // 考虑 u 的符号
   }
+}
+
+// 峰后直线下降至零承载力时触发永久失效；普通滞回过零不触发。
+bool MasonryShearMat::hasReachedFailure(double strain) const
+{
+  if (std::abs(strain) <= umax)
+    return false;
+  const double postPeakTangent = (Vu - Vmax) / (uu - umax);
+  if (postPeakTangent >= 0.0)
+    return false;
+  return Vmax + postPeakTangent * (std::abs(strain) - umax) <= 0.0;
 }
 
 void MasonryShearMat::intersectionWithBackbone(double Strain, double Stress, double Tangent, double StrainDir, double &tgtStrain, double &tgtStress)
@@ -775,8 +806,9 @@ double MasonryShearMat::computeUnload1Tangent(const State &state) {
   if (maximumStrain <= uy)
     return Ke;
 
+  const double boundedMaximumStrain = std::min(maximumStrain, uu);
   const double Ck = (alpha - 1.0) / (uu / uy - 1.0);
-  return Ke * (1.0 + Ck * (maximumStrain / uy - 1.0));
+  return Ke * (1.0 + Ck * (boundedMaximumStrain / uy - 1.0));
 }
 
 double MasonryShearMat::backboneWork(double strain) const {
