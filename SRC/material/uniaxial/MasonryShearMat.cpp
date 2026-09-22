@@ -617,8 +617,12 @@ bool MasonryShearMat::checkTransitions() {
     } else {
       // 正向加载
       // 计算假设还在 UNLOADING_1 状态下的应力
-      double tmpStress = cState.tangent * (tState.strain - cState.strain) + cState.stress;
-      if (fabs(tmpStress) < gamma * fabs(cState.revStress)) {
+      const double tmpStress = cState.tangent * (tState.strain - cState.strain) + cState.stress;
+      const double transitionStress = gamma * fabs(cState.revStress);
+      const double segmentMinimumStress = std::min(cState.stress, tmpStress);
+      const double segmentMaximumStress = std::max(cState.stress, tmpStress);
+      // 试增量只要穿过第二卸载段的应力带就必须转换，不能要求步末点恰好落入窄小区间。
+      if (segmentMinimumStress <= transitionStress && segmentMaximumStress >= -transitionStress) {
         // 进入 UNLOADING_2 状态
         tState.branch = UNLOADING_2;
         return true;
@@ -633,14 +637,8 @@ bool MasonryShearMat::checkTransitions() {
   // 从 UNLOADING_2 状态变化
   if (cState.branch == UNLOADING_2) {
     if (tState.ldir * cState.ldir < 0.0) {
-      // 反向加载
-        if ( (tState.ldir > 0 && cState.stress < gamma * cState.tgtStress) || (tState.ldir < 0 && cState.stress > gamma * cState.tgtStress) ) {
-        // 反向加载到 UNLOADING_1 状态
-        tState.branch = UNLOADING_1;
-      } else {
-        // 反向加载到 UNLOADING_2 状态
-        tState.branch = UNLOADING_2;
-      }
+      // 第二卸载段内发生方向反转时重新进入第一卸载段，再由跨越检测决定何时进入新的第二卸载段。
+      tState.branch = UNLOADING_1;
       return true;
     } else if ((tState.strain - tState.tgtStrain) * tState.ldir > 0.0) {
       // 进入 HARDENING 状态
@@ -736,11 +734,17 @@ void MasonryShearMat::ruleFromUnloading1() {
     // 更新应力
     tState.stress = tState.tangent * (tState.strain - cState.strain) + cState.stress;
   } else if (tState.branch == RELOADING_FROM_UNLOADING_1) {
-    // 更新应力
-    tState.stress = tState.tangent * (tState.strain - cState.strain) + cState.stress;
     // 更新目标点
     const double strainDir = (tState.strain - cState.strain) >= 0.0 ? 1.0 : -1.0;
     intersectionWithBackbone(cState.strain, cState.stress, cState.tangent, strainDir, tState.tgtStrain, tState.tgtStress);
+    // 重加载分支必须连接当前反转点与骨架目标点，不能继续沿用第一卸载段的高刚度。
+    const double targetDistance = tState.tgtStrain - cState.strain;
+    if (std::abs(targetDistance) > 1.0e-14) {
+      tState.tangent = (tState.tgtStress - cState.stress) / targetDistance;
+      tState.stress = cState.stress + tState.tangent * (tState.strain - cState.strain);
+    } else {
+      backbone(tState.strain, tState.stress, tState.tangent);
+    }
   } else if (tState.branch == UNLOADING_2) {
     // 以未退化历史最大位移闭合耗能回路，再设置强度退化后的目标点。
     setUnloading2Target(tState, cState);

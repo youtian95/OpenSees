@@ -447,6 +447,41 @@ void MasonryBendingMat::evaluateUnloadingPath(State &state, double rotation)
   }
 }
 
+// 从当前已提交点开始新的卸载路径，并处理单个试算增量跨越多个折点的情况。
+void MasonryBendingMat::startUnloadingPath(State &state, bool directThirdBranch)
+{
+  state.revStrain = cState.strain;
+  state.revStress = cState.stress;
+  state.directUnloading3 = directThirdBranch;
+
+  const double direction = state.ldir > 0.0 ? 1.0 : -1.0;
+  const double targetStrain = unloadingTargetStrain(state);
+  if ((state.strain - targetStrain) * direction >= 0.0) {
+    state.branch = HARDENING_1;
+    backbone(state.strain, state.stress, state.tangent);
+    return;
+  }
+
+  if (directThirdBranch) {
+    state.branch = UNLOADING_3;
+    evaluateUnloadingPath(state, state.strain);
+    return;
+  }
+
+  double unload1Strain = 0.0;
+  double unload1Stress = 0.0;
+  double unload2Strain = 0.0;
+  double unload2Stress = 0.0;
+  computeUnloadingPoints(state, unload1Strain, unload1Stress, unload2Strain, unload2Stress);
+  if ((state.strain - unload2Strain) * direction >= 0.0)
+    state.branch = UNLOADING_3;
+  else if ((state.strain - unload1Strain) * direction >= 0.0)
+    state.branch = UNLOADING_2;
+  else
+    state.branch = UNLOADING_1;
+  evaluateUnloadingPath(state, state.strain);
+}
+
 // 判断当前试状态是否跨越了下一分支边界。
 bool MasonryBendingMat::checkTransitions()
 {
@@ -478,18 +513,26 @@ bool MasonryBendingMat::checkTransitions()
       return true;
     }
 
-    const double assumedStress = cState.stress + cState.tangent * du;
     const double direction = tState.ldir > 0.0 ? 1.0 : -1.0;
-    const double unload1Stress = (1.0 - CF) * cState.revStress;
-    const double unload2Strain = unloadingSecondPointStrain(cState);
+    double unload1Strain = 0.0;
+    double unload1Stress = 0.0;
+    double unload2Strain = 0.0;
+    double unload2Stress = 0.0;
+    computeUnloadingPoints(cState, unload1Strain, unload1Stress, unload2Strain, unload2Stress);
+
+    const double targetStrain = unloadingTargetStrain(cState);
+    if ((tState.strain - targetStrain) * direction >= 0.0) {
+      tState.branch = HARDENING_1;
+      return true;
+    }
 
     // 只要当前位移已经越过B点，就直接进入第三段，不再经过第二段。
-    if ((tState.strain - unload2Strain) * direction > 0.0) {
+    if ((tState.strain - unload2Strain) * direction >= 0.0) {
       tState.branch = UNLOADING_3;
       return true;
     }
 
-    if ((assumedStress - unload1Stress) * direction > 0.0) {
+    if ((tState.strain - unload1Strain) * direction >= 0.0) {
       tState.branch = UNLOADING_2;
       return true;
     }
@@ -502,8 +545,13 @@ bool MasonryBendingMat::checkTransitions()
       return true;
     }
     const double direction = tState.ldir > 0.0 ? 1.0 : -1.0;
+    const double targetStrain = unloadingTargetStrain(cState);
+    if ((tState.strain - targetStrain) * direction >= 0.0) {
+      tState.branch = HARDENING_1;
+      return true;
+    }
     const double unload2Strain = unloadingSecondPointStrain(cState);
-    if ((tState.strain - unload2Strain) * direction > 0.0) {
+    if ((tState.strain - unload2Strain) * direction >= 0.0) {
       tState.branch = UNLOADING_3;
       return true;
     }
@@ -516,7 +564,7 @@ bool MasonryBendingMat::checkTransitions()
       return true;
     }
     const double targetStrain = unloadingTargetStrain(cState);
-    if ((tState.strain - targetStrain) * tState.ldir > 0.0) {
+    if ((tState.strain - targetStrain) * tState.ldir >= 0.0) {
       tState.branch = HARDENING_1;
       return true;
     }
@@ -565,11 +613,7 @@ void MasonryBendingMat::ruleFromHardening1()
   if (tState.branch == HARDENING_1) {
     backbone(tState.strain, tState.stress, tState.tangent);
   } else if (tState.branch == UNLOADING_1) {
-    tState.revStrain = cState.strain;
-    tState.revStress = cState.stress;
-    tState.directUnloading3 = false;
-    tState.tangent = unloadingStiffness(tState);
-    tState.stress = cState.stress + tState.tangent * (tState.strain - cState.strain);
+    startUnloadingPath(tState, false);
   }
 }
 
@@ -585,6 +629,8 @@ void MasonryBendingMat::ruleFromUnloading1()
   } else if (tState.branch == RELOADING_FROM_UNLOADING) {
     tState.tangent = unloadingStiffness(tState);
     tState.stress = cState.stress + tState.tangent * (tState.strain - cState.strain);
+  } else if (tState.branch == HARDENING_1) {
+    backbone(tState.strain, tState.stress, tState.tangent);
   }
 }
 
@@ -596,6 +642,8 @@ void MasonryBendingMat::ruleFromUnloading2()
   } else if (tState.branch == RELOADING_FROM_UNLOADING) {
     tState.tangent = unloadingStiffness(tState);
     tState.stress = cState.stress + tState.tangent * (tState.strain - cState.strain);
+  } else if (tState.branch == HARDENING_1) {
+    backbone(tState.strain, tState.stress, tState.tangent);
   }
 }
 
@@ -621,23 +669,10 @@ void MasonryBendingMat::ruleFromReloading()
   } else if (tState.branch == HARDENING_1) {
     backbone(tState.strain, tState.stress, tState.tangent);
   } else if (tState.branch == UNLOADING_1) {
-    tState.revStrain = cState.strain;
-    tState.revStress = cState.stress;
-    tState.directUnloading3 = false;
-    tState.tangent = unloadingStiffness(tState);
-    tState.stress = cState.stress + tState.tangent * (tState.strain - cState.strain);
+    startUnloadingPath(tState, false);
   } else if (tState.branch == UNLOADING_3) {
     // 再加载在零力之前反向：以当前点作为第三段起点，直接连接反向屈服点。
-    tState.revStrain = cState.strain;
-    tState.revStress = cState.stress;
-    tState.directUnloading3 = true;
-    const double targetStrain = unloadingTargetStrain(tState);
-    double targetStress = 0.0;
-    double targetTangent = 0.0;
-    backbone(targetStrain, targetStress, targetTangent);
-    const double denominator = targetStrain - tState.revStrain;
-    tState.tangent = (targetStress - tState.revStress) / denominator;
-    tState.stress = tState.revStress + tState.tangent * (tState.strain - tState.revStrain);
+    startUnloadingPath(tState, true);
   }
 }
 

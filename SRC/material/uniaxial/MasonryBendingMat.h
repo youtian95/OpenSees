@@ -124,6 +124,9 @@ class MasonryBendingMat : public UniaxialMaterial
         const State &state, double &unload1Strain, double &unload1Stress,
         double &unload2Strain, double &unload2Stress);
     void evaluateUnloadingPath(State &state, double rotation);
+    // 从新反转点建立卸载路径，并在同一次试算中直接选择当前转角所在的分支。
+    // state: 当前试状态；directThirdBranch: 是否跳过前两段，直接连接反向屈服点。
+    void startUnloadingPath(State &state, bool directThirdBranch);
 
     bool checkTransitions();
 
