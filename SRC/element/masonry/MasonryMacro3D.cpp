@@ -362,8 +362,8 @@ void MasonryMacro3D::setDomain(Domain *theDomain)
 
 int MasonryMacro3D::commitState(void)
 {
-    const double momentI = trialLateralFailure ? 0.0 : bendingMaterials[0]->getStress();
-    const double momentJ = trialLateralFailure ? 0.0 : bendingMaterials[1]->getStress();
+    const double momentI = bendingMaterials[0]->getStress();
+    const double momentJ = bendingMaterials[1]->getStress();
     const double momentSum = momentI + momentJ;
     const double V = std::abs(momentSum / theCoordTransf->getInitialLength());
     double trialContraflexureDistance = committedContraflexureDistance;
@@ -379,7 +379,8 @@ int MasonryMacro3D::commitState(void)
     if (result == 0) {
         committedContraflexureDistance = trialContraflexureDistance;
         committedFailureMode = trialFailureMode;
-        committedLateralFailure = trialLateralFailure;
+        // 单个材料失效不再触发整个宏单元退出工作。
+        committedLateralFailure = false;
     }
     return result;
 }
@@ -425,18 +426,16 @@ int MasonryMacro3D::update(void)
     // 假设两端相对于轴线法线的转角为 thetaI 和 thetaJ （逆时针为正）
     // 两端节点弹簧的转角为 phiI 和 phiJ （逆时针为正），剪切弹簧的变形为 Delta （J节点在上为正）
     // 两端节点弯矩为 Mi 和 Mj （逆时针为正），两端节点剪力为 V （向上为正，垂直于刚性杆而不是轴线）
-    // 轴力为 N （拉伸为正，注意不是轴向力，而是平行于刚性杆）；
-    // 严格的轴向力为 N_ax = N * cos(alpha) + V * sin(alpha)，其中 alpha 为刚性杆与轴线的夹角。
-    // sin(alpha) = Delta / L，L 为长度。但是这里近似认为 N_ax = N，忽略了剪切变形对轴向力的影响。
+    // 轴力为 N（拉伸为正），简化认为其始终平行于单元轴线，不考虑剪切变形引起的轴力投影。
     //
     // 那么可以列方程组（其中 phiI, phiJ, Delta 未知）：
     //
     //  thetaI = phiI - Delta / L
     //  thetaJ = phiJ - Delta / L
-    //  Mi(phiI) + Mj(phiJ) + V(Delta) * L = N * Delta * (sqrt(1 - (Delta/L)^2) - 1)    (平衡方程)
+    //  Mi(phiI) + Mj(phiJ) + V(Delta) * L = 0
     //
     // 将上两个方程代入第三个方程，得到 (仅关于 Delta)：
-    // Mi(thetaI + Delta / L) + Mj(thetaJ + Delta / L) + V(Delta) * L = N * Delta * (sqrt(1 - (Delta/L)^2) - 1)
+    // Mi(thetaI + Delta / L) + Mj(thetaJ + Delta / L) + V(Delta) * L = 0
 
     // 获取三维坐标变换的基本位移；仅使用局部 x-y 平面的 [轴向，绕 z 转角 I，绕 z 转角 J]
     const Vector &eleTrialDeformation = theCoordTransf->getBasicTrialDisp();
@@ -455,13 +454,10 @@ int MasonryMacro3D::update(void)
     }
 
     trialFailureMode = committedFailureMode;
-    trialLateralFailure = committedLateralFailure;
-    // 任一横向弹簧已降至零承载力后，只更新轴向材料，不再求解已无物理意义的内部平衡。
-    if (committedLateralFailure) {
-        return 0;
-    }
+    // 各材料分别管理失效状态，宏单元始终继续求解内部平衡。
+    trialLateralFailure = false;
     result = this->solveInternalShearDeformation(eleTrialDeformation(1), eleTrialDeformation(2), axialMaterial->getStress());
-    if (result != 0 || trialLateralFailure || !useExclusiveFailureMode || committedFailureMode != 0) {
+    if (result != 0 || !useExclusiveFailureMode || committedFailureMode != 0) {
         return result;
     }
 
@@ -529,6 +525,7 @@ int MasonryMacro3D::solveInternalShearDeformation(double thetaI, double thetaJ, 
 
 int MasonryMacro3D::evaluateInternalShearResidual(double thetaI, double thetaJ, double axialForce, double shearDeformation, double &residual, double &residualScale)
 {
+    (void)axialForce;
     const double length = theCoordTransf->getInitialLength();
     const double rotationI = thetaI + shearDeformation / length;
     const double rotationJ = thetaJ + shearDeformation / length;
@@ -558,15 +555,8 @@ int MasonryMacro3D::evaluateInternalShearResidual(double thetaI, double thetaJ, 
     const double momentI = bendingMaterials[0]->getStress();
     const double momentJ = bendingMaterials[1]->getStress();
     const double shearForce = shearMaterial->getStress();
-    const double deformationRatio = shearDeformation / length;
-    const double cosineSquared = 1.0 - deformationRatio * deformationRatio;
-    if (cosineSquared <= 0.0) {
-        return -1;
-    }
-    const double cosine = std::sqrt(cosineSquared);
-    const double axialMoment = axialForce * shearDeformation * (cosine - 1.0);
-    residual = momentI + momentJ + shearForce * length - axialMoment;
-    residualScale = std::max(1.0, std::abs(momentI) + std::abs(momentJ) + std::abs(shearForce * length) + std::abs(axialMoment));
+    residual = momentI + momentJ + shearForce * length;
+    residualScale = std::max(1.0, std::abs(momentI) + std::abs(momentJ) + std::abs(shearForce * length));
     return 0;
 }
 
@@ -615,11 +605,6 @@ int MasonryMacro3D::solveInternalShearDeformationByNewton(double thetaI, double 
         if (result != 0) {
             return result;
         }
-        // 零承载力表示横向机制已失效；此后局部平衡方程可能无根，直接交由单元失效状态处理。
-        if (this->hasTrialLateralFailure()) {
-            trialLateralFailure = true;
-            return 0;
-        }
         if (!useDisplacementConvergence && std::abs(residual) <= relativeTolerance * residualScale) {
             return 0;
         }
@@ -627,11 +612,8 @@ int MasonryMacro3D::solveInternalShearDeformationByNewton(double thetaI, double 
         const double tangentI = bendingMaterials[0]->getTangent();
         const double tangentJ = bendingMaterials[1]->getTangent();
         const double shearTangent = shearMaterial->getTangent();
-        const double deformationRatio = shearDeformation / length;
-        const double cosine = std::sqrt(1.0 - deformationRatio * deformationRatio);
-        const double geometryTangent = cosine - 1.0 - deformationRatio * deformationRatio / cosine;
-        const double residualTangent = tangentI / length + tangentJ / length + shearTangent * length - axialForce * geometryTangent;
-        const double tangentScale = std::max(1.0, std::abs(tangentI / length) + std::abs(tangentJ / length) + std::abs(shearTangent * length) + std::abs(axialForce * geometryTangent));
+        const double residualTangent = tangentI / length + tangentJ / length + shearTangent * length;
+        const double tangentScale = std::max(1.0, std::abs(tangentI / length) + std::abs(tangentJ / length) + std::abs(shearTangent * length));
         if (std::abs(residualTangent) <= 100.0 * std::numeric_limits<double>::epsilon() * tangentScale) {
             break;
         }
@@ -754,10 +736,8 @@ const Matrix &MasonryMacro3D::getTangentStiff(void)
     // ∂Mi/∂thetaI = Mi' * (1 + ∂Delta/∂thetaI / L)
     // ∂Mi/∂thetaJ = Mi' * ∂Delta/∂thetaJ / L
     //
-    // 令 c=sqrt(1-(Delta/L)^2)，g=Delta*(c-1)，平衡方程写为：
-    // R = Mi(phiI) + Mj(phiJ) + V(Delta)*L - N*g = 0
-    // g' = c - 1 - (Delta/L)^2/c
-    // D = L*∂R/∂Delta = Mi' + Mj' + V'*L^2 - N*L*g'
+    // 平衡方程为 R = Mi(phiI) + Mj(phiJ) + V(Delta)*L = 0。
+    // D = L*∂R/∂Delta = Mi' + Mj' + V'*L^2
     // ∂Delta/∂thetaI = -Mi'*L/D
     // ∂Delta/∂thetaJ = -Mj'*L/D
     //
@@ -766,12 +746,7 @@ const Matrix &MasonryMacro3D::getTangentStiff(void)
     // ∂Mj/∂thetaJ = Mj'*(1-Mj'/D)
     // ∂Mi/∂thetaI = Mi'*(1-Mi'/D)
     // ∂Mi/∂thetaJ = -Mi'*Mj'/D
-    //
-    // 轴向基本变形 u 通过 N=N(u) 改变 -N*g。冻结材料骨架对 N 的显式依赖并令 N'=∂N/∂u，可得：
-    // ∂Delta/∂u = N'*g*L/D
-    // ∂Mi/∂u = Mi'*N'*g/D，∂Mj/∂u = Mj'*N'*g/D
-    // 单元传给坐标转换的轴向基本力为 P=N+V*Delta/L，令 H'=∂(V*Delta/L)/∂Delta=(V'*Delta+V)/L，则：
-    // ∂P/∂x = N'*∂u/∂x + H'*∂Delta/∂x
+    // 轴向基本力简化为 P=N，与内部剪切变形及端部弯曲变形解耦。
 
     Matrix basicStiffness(6, 6);
     basicStiffness.Zero();
@@ -799,47 +774,30 @@ const Matrix &MasonryMacro3D::getTangentStiff(void)
         return tangentStiffness;
     }
 
-    // 材料骨架对轴力的依赖仍采用冻结当前轴力的近似，但保留新平衡方程引起的轴向—弯矩耦合。
+    // 材料骨架对轴力的依赖采用冻结当前轴力的近似，基本切线中不保留轴向—横向耦合。
     const double Mj_prime = bendingMaterials[1]->getTangent();
     const double Mi_prime = bendingMaterials[0]->getTangent();
     const double V_prime = shearMaterial->getTangent();
     const double L = theCoordTransf->getInitialLength();
-    const double N = axialMaterial->getStress();
     const double N_prime = axialMaterial->getTangent();
-    const double Delta = shearMaterial->getStrain();
-    const double V = shearMaterial->getStress();
-    const double deformationRatio = Delta / L;
-    const double cosine = std::sqrt(1.0 - deformationRatio * deformationRatio);
-    const double geometryFunction = Delta * (cosine - 1.0);
-    const double geometryTangent = cosine - 1.0 - deformationRatio * deformationRatio / cosine;
-    const double condensedDenominator = Mi_prime + Mj_prime + V_prime * L * L - N * L * geometryTangent;
-    const double denominatorScale = std::max(1.0, std::abs(Mi_prime) + std::abs(Mj_prime) + std::abs(V_prime * L * L) + std::abs(N * L * geometryTangent));
+    const double condensedDenominator = Mi_prime + Mj_prime + V_prime * L * L;
+    const double denominatorScale = std::max(1.0, std::abs(Mi_prime) + std::abs(Mj_prime) + std::abs(V_prime * L * L));
     if (std::abs(condensedDenominator) <= 100.0 * std::numeric_limits<double>::epsilon() * denominatorScale) {
         opserr << "MasonryMacro3D::getTangentStiff - element " << this->getTag() << " has a singular condensed tangent" << endln;
         tangentStiffness.Zero();
         return tangentStiffness;
     }
 
-    // 内部剪切变形对三个基本变形的导数。
-    const double Delta_u = N_prime * geometryFunction * L / condensedDenominator;
-    const double Delta_thetaI = -Mi_prime * L / condensedDenominator;
-    const double Delta_thetaJ = -Mj_prime * L / condensedDenominator;
-    const double axialProjectionTangent = (V_prime * Delta + V) / L;
-
-    // 组装轴向基本力 P=N+V*Delta/L 和两个端弯矩的一致切线。
-    basicStiffness(0, 0) = N_prime + axialProjectionTangent * Delta_u;
-    basicStiffness(0, 1) = axialProjectionTangent * Delta_thetaI;
-    basicStiffness(0, 2) = axialProjectionTangent * Delta_thetaJ;
+    // 组装轴向基本力 P=N 和两个端弯矩的一致切线。
+    basicStiffness(0, 0) = N_prime;
     basicStiffness(1, 1) = Mi_prime * (1.0 - Mi_prime / condensedDenominator);
     basicStiffness(1, 2) = -Mi_prime * Mj_prime / condensedDenominator;
     basicStiffness(2, 1) = basicStiffness(1, 2);
     basicStiffness(2, 2) = Mj_prime * (1.0 - Mj_prime / condensedDenominator);
-    basicStiffness(1, 0) = Mi_prime * N_prime * geometryFunction / condensedDenominator;
-    basicStiffness(2, 0) = Mj_prime * N_prime * geometryFunction / condensedDenominator;
 
     Vector basicForce(6);
     basicForce.Zero();
-    basicForce(0) = N + V * Delta / L;
+    basicForce(0) = axialMaterial->getStress();
     basicForce(1) = bendingMaterials[0]->getStress();
     basicForce(2) = bendingMaterials[1]->getStress();
 
@@ -871,7 +829,7 @@ const Matrix &MasonryMacro3D::getInitialStiff(void)
         return initialStiffness;
     }
 
-    // 初始状态 N=V=Delta=0，新几何项及轴向投影项均为零。
+    // 初始状态下轴向与横向自由度解耦。
     initialBasicStiffness(0, 0) = axialTangent;
     initialBasicStiffness(1, 1) = tangentI * (1.0 - tangentI / condensedDenominator);
     initialBasicStiffness(1, 2) = -tangentI * tangentJ / condensedDenominator;
@@ -889,11 +847,8 @@ const Matrix &MasonryMacro3D::getInitialStiff(void)
 const Vector &MasonryMacro3D::getResistingForce(void)
 // 从各材料读取当前内力，组装并转换为 12 维全局节点恢复力。
 {
-    // N 为轴向弹簧力，单元轴向基本力还包含剪力沿单元轴线的投影 V*Delta/L。
+    // 简化认为单元轴向基本力等于轴向弹簧力 N。
     double axialForce = axialMaterial->getStress();
-    double shearForce = trialLateralFailure ? 0.0 : shearMaterial->getStress();
-    double shearDeformation = shearMaterial->getStrain();
-    double length = theCoordTransf->getInitialLength();
     // Mi
     double momentI = trialLateralFailure ? 0.0 : bendingMaterials[0]->getStress();
     // Mj
@@ -901,7 +856,7 @@ const Vector &MasonryMacro3D::getResistingForce(void)
 
     Vector basicForce(6);
     basicForce.Zero();
-    basicForce (0) = axialForce + shearForce * shearDeformation / length;
+    basicForce (0) = axialForce;
     basicForce (1) = momentI;
     basicForce (2) = momentJ;
 
