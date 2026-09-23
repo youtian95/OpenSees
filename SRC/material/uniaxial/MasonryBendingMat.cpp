@@ -385,8 +385,14 @@ void MasonryBendingMat::computeUnloadingPoints(const State &state, double &unloa
   unload1Stress = (1.0 - CF) * state.revStress;
   unload1Strain = state.revStrain + (unload1Stress - state.revStress) / safeK1;
 
-  // CD控制第二折点B相对屈服转角的水平位置，B点弯矩由第二段直线连续计算。
+// CD控制第二折点B相对屈服转角的水平位置，B点弯矩由第二段直线连续计算。
+  // B必须落在第一折点A与卸载目标之间；否则反转点应变小于(1+CD)*uy时，卸载第一步会被误判为
+  // 已越过B而直接进入第三段，并把B到目标的直线反向延长到反转点，造成弯矩在反转处不连续。
   unload2Strain = unloadingSecondPointStrain(state);
+  const double unloadTargetStrain = unloadingTargetStrain(state);
+  const double insideLower = std::min(unload1Strain, unloadTargetStrain);
+  const double insideUpper = std::max(unload1Strain, unloadTargetStrain);
+  unload2Strain = std::max(insideLower, std::min(unload2Strain, insideUpper));
   unload2Stress = unload1Stress + safeK2 * (unload2Strain - unload1Strain);
 }
 
