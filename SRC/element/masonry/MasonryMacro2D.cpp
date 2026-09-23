@@ -202,7 +202,7 @@ void *OPS_MasonryMacro2D(void)
 }
 
 MasonryMacro2D::MasonryMacro2D(int tag, int nodeI, int nodeJ, UniaxialMaterial &bendingMaterial, UniaxialMaterial &shearMaterialInput, UniaxialMaterial &axialMaterialInput, CrdTransf &coordinateTransformation, double widthInput, double thicknessInput, double compressiveStrengthInput, double cohesionInput, double diagonalTensileStrengthInput, double stressBlockCoefficientInput, double frictionCoefficientInput, int maximumIterationsInput, double relativeToleranceInput, bool useDisplacementConvergenceInput, bool useExclusiveFailureModeInput, double printModelWidthInput, double printModelThicknessInput)
-    : Element(tag, ELE_TAG_MasonryMacro2D), connectedExternalNodes(2), theCoordTransf(coordinateTransformation.getCopy2d()), shearMaterial(shearMaterialInput.getCopy()), axialMaterial(axialMaterialInput.getCopy()), width(widthInput), thickness(thicknessInput), compressiveStrength(compressiveStrengthInput), cohesion(cohesionInput), diagonalTensileStrength(diagonalTensileStrengthInput), stressBlockCoefficient(stressBlockCoefficientInput), frictionCoefficient(frictionCoefficientInput), printModelWidth(printModelWidthInput), printModelThickness(printModelThicknessInput), committedContraflexureDistance(0.0), maximumIterations(maximumIterationsInput), relativeTolerance(relativeToleranceInput), useDisplacementConvergence(useDisplacementConvergenceInput), useExclusiveFailureMode(useExclusiveFailureModeInput), committedFailureMode(0), trialFailureMode(0), committedLateralFailure(false), trialLateralFailure(false), tangentStiffness(6, 6), initialStiffness(6, 6), resistingForce(6)
+    : Element(tag, ELE_TAG_MasonryMacro2D), connectedExternalNodes(2), theCoordTransf(coordinateTransformation.getCopy2d()), shearMaterial(shearMaterialInput.getCopy()), axialMaterial(axialMaterialInput.getCopy()), width(widthInput), thickness(thicknessInput), compressiveStrength(compressiveStrengthInput), cohesion(cohesionInput), diagonalTensileStrength(diagonalTensileStrengthInput), stressBlockCoefficient(stressBlockCoefficientInput), frictionCoefficient(frictionCoefficientInput), printModelWidth(printModelWidthInput), printModelThickness(printModelThicknessInput), committedContraflexureDistance(0.0), maximumIterations(maximumIterationsInput), relativeTolerance(relativeToleranceInput), useDisplacementConvergence(useDisplacementConvergenceInput), useExclusiveFailureMode(useExclusiveFailureModeInput), committedFailureMode(0), trialFailureMode(0), committedLateralFailure(false), trialLateralFailure(false), committedBackboneLocked(false), trialBackboneLocked(false), tangentStiffness(6, 6), initialStiffness(6, 6), resistingForce(6)
 {
     connectedExternalNodes(0) = nodeI;
     connectedExternalNodes(1) = nodeJ;
@@ -213,7 +213,7 @@ MasonryMacro2D::MasonryMacro2D(int tag, int nodeI, int nodeJ, UniaxialMaterial &
 }
 
 MasonryMacro2D::MasonryMacro2D()
-    : Element(0, ELE_TAG_MasonryMacro2D), connectedExternalNodes(2), theCoordTransf(0), shearMaterial(0), axialMaterial(0), width(0.0), thickness(0.0), compressiveStrength(0.0), cohesion(0.0), diagonalTensileStrength(0.0), stressBlockCoefficient(0.85), frictionCoefficient(0.4), printModelWidth(-1.0), printModelThickness(-1.0), committedContraflexureDistance(0.0), maximumIterations(50), relativeTolerance(1.0e-8), useDisplacementConvergence(true), useExclusiveFailureMode(false), committedFailureMode(0), trialFailureMode(0), committedLateralFailure(false), trialLateralFailure(false), tangentStiffness(6, 6), initialStiffness(6, 6), resistingForce(6)
+    : Element(0, ELE_TAG_MasonryMacro2D), connectedExternalNodes(2), theCoordTransf(0), shearMaterial(0), axialMaterial(0), width(0.0), thickness(0.0), compressiveStrength(0.0), cohesion(0.0), diagonalTensileStrength(0.0), stressBlockCoefficient(0.85), frictionCoefficient(0.4), printModelWidth(-1.0), printModelThickness(-1.0), committedContraflexureDistance(0.0), maximumIterations(50), relativeTolerance(1.0e-8), useDisplacementConvergence(true), useExclusiveFailureMode(false), committedFailureMode(0), trialFailureMode(0), committedLateralFailure(false), trialLateralFailure(false), committedBackboneLocked(false), trialBackboneLocked(false), tangentStiffness(6, 6), initialStiffness(6, 6), resistingForce(6)
 {
     theNodes[0] = 0;
     theNodes[1] = 0;
@@ -305,6 +305,7 @@ int MasonryMacro2D::commitState(void)
         committedFailureMode = trialFailureMode;
         // 单个材料失效不再触发整个宏单元退出工作。
         committedLateralFailure = false;
+        committedBackboneLocked = trialBackboneLocked;
     }
     return result;
 }
@@ -318,6 +319,7 @@ int MasonryMacro2D::revertToLastCommit(void)
     result += axialMaterial->revertToLastCommit();
     trialFailureMode = committedFailureMode;
     trialLateralFailure = committedLateralFailure;
+    trialBackboneLocked = committedBackboneLocked;
     return result;
 }
 
@@ -333,6 +335,8 @@ int MasonryMacro2D::revertToStart(void)
     trialFailureMode = 0;
     committedLateralFailure = false;
     trialLateralFailure = false;
+    committedBackboneLocked = false;
+    trialBackboneLocked = false;
     resistingForce.Zero();
     return result;
 }
@@ -371,17 +375,24 @@ int MasonryMacro2D::update(void)
         return result;
     }
 
-    // 反弯点在本步固定，轴力仍采用当前试算值更新骨架。
-    result = this->updateMaterialBackbones(axialMaterial->getStress());
-    if (result != 0) {
-        return result;
+    // 反弯点在本步固定，轴力仍采用当前试算值更新骨架；骨架一旦在屈服后锁定便不再更新。
+    if (!committedBackboneLocked) {
+        result = this->updateMaterialBackbones(axialMaterial->getStress());
+        if (result != 0) {
+            return result;
+        }
     }
 
     trialFailureMode = committedFailureMode;
     // 各材料分别管理失效状态，宏单元始终继续求解内部平衡。
     trialLateralFailure = false;
     result = this->solveInternalShearDeformation(eleTrialDeformation(1), eleTrialDeformation(2), axialMaterial->getStress());
-    if (result != 0 || !useExclusiveFailureMode || committedFailureMode != 0) {
+    if (result != 0) {
+        return result;
+    }
+    // 任一横向弹簧达到屈服后锁定骨架，之后不再按实时轴力更新，避免应力跳变破坏内部平衡。
+    trialBackboneLocked = committedBackboneLocked || this->hasReachedBackboneLockThreshold();
+    if (!useExclusiveFailureMode || committedFailureMode != 0) {
         return result;
     }
 
@@ -516,6 +527,21 @@ bool MasonryMacro2D::hasTrialLateralFailure(void) const
         }
     }
     return false;
+}
+
+// 判断三个横向弹簧中是否已有任一达到屈服变形，用于在屈服后锁定骨架。
+bool MasonryMacro2D::hasReachedBackboneLockThreshold(void) const
+{
+    const double shearYieldStrain = getYieldStrain(shearMaterial);
+    const double bendingYieldStrainI = getYieldStrain(bendingMaterials[0]);
+    const double bendingYieldStrainJ = getYieldStrain(bendingMaterials[1]);
+    if (shearYieldStrain <= 0.0 || bendingYieldStrainI <= 0.0 || bendingYieldStrainJ <= 0.0) {
+        return false;
+    }
+    const double shearRatio = std::abs(shearMaterial->getStrain()) / shearYieldStrain;
+    const double bendingRatioI = std::abs(bendingMaterials[0]->getStrain()) / bendingYieldStrainI;
+    const double bendingRatioJ = std::abs(bendingMaterials[1]->getStrain()) / bendingYieldStrainJ;
+    return std::max(std::max(shearRatio, bendingRatioI), bendingRatioJ) >= 1.0;
 }
 
 int MasonryMacro2D::solveInternalShearDeformationByNewton(double thetaI, double thetaJ, double axialForce, double initialShearDeformation)
@@ -802,7 +828,7 @@ int MasonryMacro2D::sendSelf(int commitTag, Channel &theChannel)
         idData(6 + 2 * i) = ensureMaterialDbTag(materials[i], theChannel);
     }
 
-    Vector vectorData(20);
+    Vector vectorData(21);
     vectorData(0) = alphaM;
     vectorData(1) = betaK;
     vectorData(2) = betaK0;
@@ -823,6 +849,7 @@ int MasonryMacro2D::sendSelf(int commitTag, Channel &theChannel)
     vectorData(17) = printModelWidth;
     vectorData(18) = printModelThickness;
     vectorData(19) = committedLateralFailure ? 1.0 : 0.0;
+    vectorData(20) = committedBackboneLocked ? 1.0 : 0.0;
 
     if (theChannel.sendID(dataTag, commitTag, idData) < 0 || theChannel.sendVector(dataTag, commitTag, vectorData) < 0 || theCoordTransf->sendSelf(commitTag, theChannel) < 0) {
         return -1;
@@ -840,7 +867,7 @@ int MasonryMacro2D::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroke
 {
     int dataTag = this->getDbTag();
     ID idData(13);
-    Vector vectorData(20);
+    Vector vectorData(21);
     if (theChannel.recvID(dataTag, commitTag, idData) < 0 || theChannel.recvVector(dataTag, commitTag, vectorData) < 0) {
         return -1;
     }
@@ -870,6 +897,8 @@ int MasonryMacro2D::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroke
     printModelThickness = vectorData(18);
     committedLateralFailure = vectorData(19) != 0.0;
     trialLateralFailure = committedLateralFailure;
+    committedBackboneLocked = vectorData(20) != 0.0;
+    trialBackboneLocked = committedBackboneLocked;
     if (theCoordTransf == 0 || theCoordTransf->getClassTag() != idData(3)) {
         delete theCoordTransf;
         theCoordTransf = theBroker.getNewCrdTransf(idData(3));

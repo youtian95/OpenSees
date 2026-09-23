@@ -136,6 +136,9 @@ private:
     // 检查任一横向弹簧的试算骨架是否已降至零承载力。
     bool hasTrialLateralFailure(void) const;
 
+    // 检查任一横向弹簧的试算变形是否已达到屈服，用于在屈服后锁定骨架。
+    bool hasReachedBackboneLockThreshold(void) const;
+
     // 使用普通 Newton 法求解内部剪切变形。
     // thetaI: I 端相对于单元弦的基本试算转角，逆时针为正。
     // thetaJ: J 端相对于单元弦的基本试算转角，逆时针为正。
@@ -187,6 +190,10 @@ private:
     // 横向失效后不再求解无根的内部平衡方程，但仍保留轴向弹簧。
     bool committedLateralFailure;
     bool trialLateralFailure;
+
+    // 屈服后骨架锁定：锁定后不再按实时轴力更新骨架，避免已屈服弹簧的应力随轴力跳变。
+    bool committedBackboneLocked;
+    bool trialBackboneLocked;
 
     // 以下对象作为 OpenSees const 引用返回值的持久缓存。
     Matrix tangentStiffness;
